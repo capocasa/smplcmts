@@ -1,0 +1,16 @@
+# Package
+
+version       = "0.1.0"
+author        = "Carlo Capocasa"
+description   = "A simple website comment system written in Nim"
+license       = "MIT"
+bin           = @["nimcomment"]
+backend       = "c"
+
+# Dependencies
+
+requires "nim >= 1.6.0"
+requires "cligen"
+requires "jester"
+requires "tiny_sqlite"
+requires "ago"
