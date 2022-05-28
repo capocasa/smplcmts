@@ -1,11 +1,12 @@
 #? stdtmpl
 # import types
-# proc formatNew*(username: string): string =
-<form id="comment-new">
+# proc formatPublish*(username: string): string =
+<form action="/publish" method="post">
   <label>
-    Comment as $username
+    Comment as <span class="username">$username</span>
     <textarea name="comment"></textarea>
     <small>You can ask a question, share an experience, or express yourself your own way.</small>
   </label>
+  <input type="submit" value="Publish">
 </form>
 
