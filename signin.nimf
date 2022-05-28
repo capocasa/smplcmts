@@ -1,0 +1,12 @@
+#? stdtmpl
+# import types
+# proc formatSignin*(): string =
+<form id="comment-signin" action="/signin" method="post">
+  <i>Would you like to make a comment?<i>
+  <label>
+    Email
+    <input type="text" name="email" />
+    <small>Only used to send you a password</small>
+  </label>
+</form>
+

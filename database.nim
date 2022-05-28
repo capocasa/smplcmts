@@ -5,7 +5,7 @@ from os import removeFile
 
 export tiny_sqlite
 
-const dbPath = "nimcomment.sqlite"
+const dbPath = "nimcomments.sqlite"
 
 let db* = openDatabase(dbPath)
 
@@ -22,16 +22,6 @@ proc initDb*() =
     );
     CREATE UNIQUE INDEX idx_user_username ON user(`username`);
     CREATE UNIQUE INDEX idx_user_email ON user(`email`);
-    CREATE TABLE otp(
-      user_id INTEGER NOT NULL,
-      otp INTEGER NOT NULL,
-      timestamp INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-      PRIMARY KEY (user_id, otp),
-      FOREIGN KEY(user_id) REFERENCES `user`(id) DEFERRABLE INITIALLY DEFERRED
-    );
-    CREATE INDEX idx_user_id ON otp(`user_id`);
-    CREATE INDEX idx_otp_timestamp ON otp('timestamp');
-    CREATE INDEX idx_otp_otp ON otp('otp');
     CREATE TABLE url(
       id INTEGER PRIMARY KEY,
       url TEXT NOT NULL,
@@ -42,16 +32,16 @@ proc initDb*() =
       id INTEGER PRIMARY KEY,
       url_id INTEGER NOT NULL,
       user_id INTEGER NOT NULL,
-      comment_id INTEGER,
+      parent_comment_id INTEGER,
       timestamp INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
       comment TEXT NOT NULL,
       FOREIGN KEY(url_id) REFERENCES `url`(id) DEFERRABLE INITIALLY DEFERRED,
       FOREIGN KEY(user_id) REFERENCES `user`(id) DEFERRABLE INITIALLY DEFERRED,
-      FOREIGN KEY(comment_id) REFERENCES `comment`(id) DEFERRABLE INITIALLY DEFERRED
+      FOREIGN KEY(parent_comment_id) REFERENCES `comment`(id) DEFERRABLE INITIALLY DEFERRED
     );
     CREATE INDEX idx_comment_url_id ON comment('url_id');
     CREATE INDEX idx_comment_user_id ON comment('user_id');
-    CREATE INDEX idx_comment_comment_id ON comment('comment_id');
+    CREATE INDEX idx_comment_parent_comment_id ON comment('parent_comment_id');
     CREATE INDEX idx_comment_timestamp ON comment('timestamp');
   """)
 
@@ -69,4 +59,12 @@ proc toDbValue*(w: Weekday): DbValue =
 
 proc fromDbValue*(val: DbValue, T: typedesc[Weekday]): Weekday =
   val.intVal.Weekday
+
+
+# add features to tiny_sqlite
+proc unpack*[T: object](row: ResultRow): T =
+    var idx = 0
+    for name, value in fieldPairs result:
+        value = row[idx].fromDbValue(type(value))
+        idx.inc
 

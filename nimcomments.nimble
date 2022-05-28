@@ -4,7 +4,7 @@ version       = "0.1.0"
 author        = "Carlo Capocasa"
 description   = "A simple website comment system written in Nim"
 license       = "MIT"
-bin           = @["nimcomment"]
+bin           = @["nimcomments"]
 backend       = "c"
 
 # Dependencies
@@ -14,3 +14,4 @@ requires "cligen"
 requires "jester"
 requires "tiny_sqlite"
 requires "ago"
+requires "lmdb"

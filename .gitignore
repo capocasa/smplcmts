@@ -1,2 +1,4 @@
-nimcomment.sqlite
+nimcomments.sqlite
+nimcomments.cache
+nimcomments
 tags

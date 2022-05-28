@@ -1,0 +1,11 @@
+#? stdtmpl
+# import types
+# proc formatNew*(username: string): string =
+<form id="comment-new">
+  <label>
+    Comment as $username
+    <textarea name="comment"></textarea>
+    <small>You can ask a question, share an experience, or express yourself your own way.</small>
+  </label>
+</form>
+

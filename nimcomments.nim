@@ -1,5 +1,5 @@
 
-import os, strutils
+import std/[os, strutils]
 import cligen/parseopt3
 import database, serve
 

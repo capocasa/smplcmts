@@ -1,12 +1,13 @@
 #? stdtmpl
-# import common, ago
+# import types, ago
 # proc format*(comments: iterator: Comment): string =
-<div class="comments">
+<div id="all-comments">
 # for comment in comments():
-  <div class="comment">
+  <div class="comment" id="comment-$comment.id">
     <div class="name">$comment.name</div>
     <div class="time">$comment.timestamp.ago</div>
     <div class="comment">$comment.comment</div>
   </div>
 # end for
 </div>
+
