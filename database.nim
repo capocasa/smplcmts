@@ -15,13 +15,13 @@ proc initDb*() =
   db.execScript("""
     CREATE TABLE user(
       id INTEGER PRIMARY KEY,
-      username TEXT NOT NULL,
-      email TEXT NOT NULL,
+      username TEXT NOT NULL DEFAULT "",
+      email_hash TEXT NOT NULL,
       UNIQUE(username),
-      UNIQUE(email)
+      UNIQUE(email_hash)
     );
     CREATE UNIQUE INDEX idx_user_username ON user(`username`);
-    CREATE UNIQUE INDEX idx_user_email ON user(`email`);
+    CREATE UNIQUE INDEX idx_user_email_hash ON user(`email_hash`);
     CREATE TABLE url(
       id INTEGER PRIMARY KEY,
       url TEXT NOT NULL,

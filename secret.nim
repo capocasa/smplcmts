@@ -31,3 +31,17 @@ proc generatePassword*(length: Natural = 64, ranges: openarray[Slice[char]] = ['
           break
 
 
+# borrowed from https://rosettacode.org/wiki/SHA-256#Nim
+
+import strutils
+const SHA256Len = 32
+proc SHA256(d: cstring, n: culong, md: cstring = nil): cstring {.cdecl, dynlib: "libssl.so", importc.}
+proc SHA256*(s: string): string =
+  result = ""
+  let s = SHA256(s.cstring, s.len.culong)
+  for i in 0 .. SHA256Len - 1:
+    result.add s[i].BiggestInt.toHex(2).toLower
+
+proc saltedHash*(s: string): string =
+  SHA256("!+E@/IQ<ci~mWS>7-g,t*A$dKW&0UH)1PcxN}$Fzeo=}ofMGtUk.Xk*fwG/ett7B" & s)
+

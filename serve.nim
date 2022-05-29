@@ -27,8 +27,8 @@ proc auth(request: Request): Auth =
   let token = header[7..^1]
 
   let txn = dbenv.newTxn()
-  discard parseSaturatedNatural(get(txn, dbi, "token $1 user_id" % token), result.user.id)
-  result.user.username = get(txn, dbi, "user_id $1 username" % $result.user.id)
+  discard parseSaturatedNatural(get(txn, dbi, "token $1 userId" % token), result.user.id)
+  result.user.username = get(txn, dbi, "userId $1 username" % $result.user.id)
   result.token = token
   txn.abort()
 
@@ -59,12 +59,19 @@ router comments:
     let pin = generatePassword(8, ['0'..'9'])
     let email = request.params["email"]
     let txn = dbenv.newTxn()
-    put(txn, dbi, "signin $1" % email, pin)
+    put(txn, dbi, "signin $1" % saltedHash(email), pin)
     txn.commit()
     let smtp = newAsyncSmtp()
     await smtp.connect("localhost", Port 25)
     try:
-      await smtp.sendMail("comments@capocasa.net", @[email], $createMessage("pin mail", "pin: $1" % pin, @[email]))
+      await smtp.sendMail("comments@capocasa.net", @[email], $createMessage("Comments One-Time Password", """
+Thank you, here is your one-time password. Please go back to your comments page and enter or copy/paste it.
+
+Your One-Time Password:
+
+$1
+
+""" % pin, @[email]))
     except ReplyError as e:
       resp Http409, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/plain"}, "Invalid email"
     resp Http200, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/plain"}, email
@@ -72,28 +79,28 @@ router comments:
   post "/confirm":
     let txn = dbenv.newTxn()
     let email = request.params["email"]
-    let key = "signin $1" % email
-    echo request.params["email"]
+    let emailHash = saltedHash(email)
+    let key = "signin $1" % emailHash
     let pin = try:
       get(txn, dbi, key)
     except:
       txn.abort()
-      resp Http401, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/plain"}, "No one-time-password sent to this email address"
+      resp Http401, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/plain"}, "No one-time-password sent to %#" % email
     if pin != request.params["pin"]:
       txn.abort()
-      resp Http401, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/plain"}, "One-time-password does not match the one sent to this email address"
+      resp Http401, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/plain"}, "One-time-password does not match the one sent to $#" % email
     del(txn, dbi, key, "")
-    let value = db.value(""" SELECT id FROM user WHERE email = ? """, email)
-    let user_id = if value.isSome:
+    let value = db.value(""" SELECT id FROM user WHERE email_hash = ? """, emailHash)
+    let userId = if value.isSome:
       value.get().fromDbValue(int64)
     else:
-      db.exec(""" INSERT INTO user (email) VALUES (?) """, email)
+      db.exec(""" INSERT INTO user (email_hash) VALUES (?) """, emailHash)
       db.lastInsertRowId()
 
     let token = generatePassword(128)
-    put(txn, dbi, "token $1 user_id" % token, $user_id)
-    put(txn, dbi, "user_id $1 username" % $user_id, "")
-    put(txn, dbi, "user_id $1 token" % $user_id, token)
+    put(txn, dbi, "token $1 userId" % token, $userId)
+    put(txn, dbi, "userId $1 username" % $userId, "")
+    put(txn, dbi, "userId $1 token" % $userId, token)
     txn.commit()
 
     resp Http200, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/plain"}, token
@@ -105,7 +112,7 @@ router comments:
     let username = request.params["username"]
     db.exec(""" UPDATE user SET username = ? WHERE id = ? """, username, auth.user.id)
     let txn = dbenv.newTxn()
-    put(txn, dbi, "user_id $1 username" % $auth.user.id, username)
+    put(txn, dbi, "userId $1 username" % $auth.user.id, username)
     txn.commit()
     resp Http200, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/plain"}, username
 
