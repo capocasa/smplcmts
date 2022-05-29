@@ -1,5 +1,5 @@
 #? stdtmpl
-# import types
+# import format
 # proc formatName*(): string =
 <form action="/name" method="post">
   <label>

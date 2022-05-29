@@ -1,5 +1,5 @@
 #? stdtmpl
-# import types
+# import format
 # proc formatSignin*(): string =
 <form action="/signin" method="post">
   <i>Would you like to make a comment?<i>

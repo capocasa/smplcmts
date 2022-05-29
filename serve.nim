@@ -38,7 +38,7 @@ router comments:
     iterator comments(): Comment =
       for row in db.iterate(""" SELECT comment.id, timestamp, username, comment, parent_comment_id FROM comment LEFT JOIN user ON comment.user_id=user.id LEFT JOIN url ON comment.url_id=url.id WHERE url=? ORDER BY timestamp """, request.params["url"]):
         yield unpack[Comment](row)
-    resp Http200, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/html"}, format(comments)
+    resp Http200, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/html"}, formatComments(comments)
 
   get "/publish":
     let auth = request.auth

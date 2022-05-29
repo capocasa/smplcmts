@@ -1,5 +1,5 @@
 #? stdtmpl
-# import types
+# import format
 # proc formatConfirm*(): string =
 <form id="comment-confirm" action="/confirm" method="post">
   <label>
