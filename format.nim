@@ -7,3 +7,4 @@ proc `~`*(s: string): string =
   result = result.replace("&", "&amp;")
   result = result.replace("<", "&lt;")
   result = result.replace(">", "&gt;")
+  result = result.replace("\n", "<br>")

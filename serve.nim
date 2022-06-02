@@ -1,4 +1,4 @@
-import std/[strutils, re, times, tables, options, parseutils, sugar, smtp]
+import std/[strutils, re, times, tables, options, parseutils, strscans, smtp]
 import jester except error, routeException
 import jester/private/utils
 import types, database, cache, secret
@@ -7,114 +7,159 @@ include "comments.nimf"
 include "publish.nimf"
 include "name.nimf"
 include "signin.nimf"
-include "confirm.nimf"
 
 type
   AuthError* = object of ValueError
   Auth = object
-    token: string
     user: User
+    sessionToken: string
+
+template setHeader(key, value: string) =
+  setHeader(result[2], key, value)
+
+template defaultHeaders() =
+  setHeader("Access-Control-Allow-Origin", "http://localhost")
+  setHeader("Access-Control-Allow-Credentials", "true")
+  setHeader("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
+
+template resp*(code: HttpCode) =
+  defaultHeaders()
+  jester.resp code
+
+template resp*(code: HttpCode, content: string,
+               contentType = "text/plain;charset=utf-8") =
+  defaultHeaders()
+  jester.resp code, content, contentType
+
+template redirect(url: string, halt = true) =
+  defaultHeaders()
+  jester.redirect(url, halt)
 
 proc auth(request: Request): Auth =
-  let header = if request.headers.hasKey("Authorization"):
-    request.headers["Authorization"]
+  result.sessionToken = if request.cookies.hasKey("SessionToken"):
+    request.cookies["SessionToken"]
   else:
-    raise newException(AuthError, "Authorization header required")
-
-  if not header.startsWith("Bearer "):
-    raise newException(AuthError, "Authorization header must start with 'Bearer '")
-
-  let token = header[7..^1]
+    raise newException(AuthError, "Please request a comment link by email to start commenting")
 
   let txn = dbenv.newTxn()
-  discard parseSaturatedNatural(get(txn, dbi, "token $1 userId" % token), result.user.id)
-  result.user.username = get(txn, dbi, "userId $1 username" % $result.user.id)
-  result.token = token
-  txn.abort()
+  try:
+    let value = get(txn, dbi, "session $#" % saltedHash(result.sessionToken))
+    discard parseSaturatedNatural(value, result.user.id)
+    result.user.username = get(txn, dbi, "userId $# username" % $result.user.id)
+  except:
+    raise newException(AuthError, "There is something wrong with your comment link, please request a new one by email")
+  finally:
+    txn.abort()
 
+proc base(request: Request): string =
+  if request.secure:
+    result.add("https://")
+    result.add(request.host)
+    if request.port != 443:
+      result.add(":")
+      result.add($request.port)
+  else:
+    result.add("http://")
+    if request.port != 80:
+      result.add(":")
+      result.add($request.port)
 
 router comments:
   get "/comments":
     iterator comments(): Comment =
       for row in db.iterate(""" SELECT comment.id, timestamp, username, comment, parent_comment_id FROM comment LEFT JOIN user ON comment.user_id=user.id LEFT JOIN url ON comment.url_id=url.id WHERE url=? ORDER BY timestamp """, request.params["url"]):
         yield unpack[Comment](row)
-    resp Http200, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/html"}, formatComments(comments)
+    resp Http200, formatComments(comments), "text/html;charset=utf-8"
 
   get "/publish":
-    let auth = request.auth
+    let auth = try:
+      request.auth
+    except AuthError as e:
+      resp Http200,  formatSignin(), "text/html;charset=utf-8"
     if auth.user.username == "":
-      resp Http200, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/html"}, formatName()
-    resp Http200, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/html"}, formatPublish(auth.user.username)
-  
-  get "/signin":
-    resp Http200, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/html"}, formatSignin()
-
-  get "/confirm":
-    resp Http200, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/html"}, formatConfirm()
+      resp Http200, formatName(), "text/html; charset=utf-8"
+    resp Http200,  formatPublish(auth.user.username), "text/html;charset=utf-8"
 
   get "/name":
-    resp Http200, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/html"}, formatName()
+    resp Http200, formatName(), "text/html;charset=utf-8"
 
   post "/signin":
-    let pin = generatePassword(8, ['0'..'9'])
+    let authToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
     let email = request.params["email"]
+    let url = request.params["url"]
     let txn = dbenv.newTxn()
-    put(txn, dbi, "signin $1" % saltedHash(email), pin)
+    put(txn, dbi, "signin $#" % saltedHash(authToken), "$# $#" % [saltedHash(email), url])
     txn.commit()
     let smtp = newAsyncSmtp()
     await smtp.connect("localhost", Port 25)
+    let link = "$#/confirm/$#" % ["http://localhost:5000", authToken]
     try:
-      await smtp.sendMail("comments@capocasa.net", @[email], $createMessage("Comments One-Time Password", """
-Thank you, here is your one-time password. Please go back to your comments page and enter or copy/paste it.
+      await smtp.sendMail("comments@capocasa.net", @[email], $createMessage("Secret Commenting Link", """
 
-Your One-Time Password:
+Thank you! Please follow this link to start commenting:
 
-$1
+$#
 
-""" % pin, @[email]))
+Please make sure you don't give it to anyone else so no one can comment in your name
+
+""" % link, @[email]))
     except ReplyError as e:
-      resp Http409, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/plain"}, "Invalid email"
-    resp Http200, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/plain"}, email
+      resp Http409, "The email could not be sent, please take a look at the address."
 
-  post "/confirm":
+    resp Http200, """Thank you! Please check your email, you're looking for one called "Secret Commenting Link"."""
+  
+  delete "/signin":
+    let auth = request.auth
     let txn = dbenv.newTxn()
-    let email = request.params["email"]
-    let emailHash = saltedHash(email)
-    let key = "signin $1" % emailHash
-    let pin = try:
+    let key = "session $#" % saltedHash(auth.sessionToken)
+    let value = get(txn, dbi, key)
+    del(txn, dbi, key, value)
+    txn.commit()
+    resp Http200, "You are now no longer commenting as $#" % auth.user.username
+
+  get "/confirm/@authToken":
+    let key = "signin $#" % saltedHash(@"authToken")
+    let txn = dbenv.newTxn()
+    let value = try:
       get(txn, dbi, key)
     except:
       txn.abort()
-      resp Http401, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/plain"}, "No one-time-password sent to %#" % email
-    if pin != request.params["pin"]:
-      txn.abort()
-      resp Http401, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/plain"}, "One-time-password does not match the one sent to $#" % email
-    del(txn, dbi, key, "")
-    let value = db.value(""" SELECT id FROM user WHERE email_hash = ? """, emailHash)
-    let userId = if value.isSome:
-      value.get().fromDbValue(int64)
+      resp Http401, "No link matching this one was sent recently, please check that it is the right one"
+    var emailHash, redirectUrl: string
+    assert scanf(value, "$+ $+$.", emailHash, redirectUrl), "internal comment email error"
+    del(txn, dbi, key, value)
+    let row = db.one(""" SELECT id, username FROM user WHERE email_hash = ? """, emailHash)
+    let user = if row.isSome:
+      unpack[User](row.get)
     else:
       db.exec(""" INSERT INTO user (email_hash) VALUES (?) """, emailHash)
-      db.lastInsertRowId()
+      var user:User
+      user.id = db.lastInsertRowId()
+      user
 
-    let token = generatePassword(128)
-    put(txn, dbi, "token $1 userId" % token, $userId)
-    put(txn, dbi, "userId $1 username" % $userId, "")
-    put(txn, dbi, "userId $1 token" % $userId, token)
+    let sessionToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
+    put(txn, dbi, "session $#" % saltedHash(sessionToken), $user.id)
+    put(txn, dbi, "userId $# username" % $user.id, user.username)
     txn.commit()
 
-    resp Http200, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/plain"}, token
+    setCookie("SessionToken", sessionToken, expires=daysForward(7), sameSite=None, httpOnly=true,
+              domain="localhost", path="/",)
+    setHeader("Access-Control-Allow-Headers", "Set-Cookie")
+    redirect redirectUrl
 
   post "/name":
     let auth = request.auth
     if auth.user.username != "":
-      resp Http409, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/plain"}, "Name already set"
+      resp Http409, "You already chose your name"
     let username = request.params["username"]
-    db.exec(""" UPDATE user SET username = ? WHERE id = ? """, username, auth.user.id)
+    try:
+      db.exec(""" UPDATE user SET username = ? WHERE id = ? """, username, auth.user.id)
+    except SqliteError:
+      resp Http409, "Someone already chose that name!"
     let txn = dbenv.newTxn()
-    put(txn, dbi, "userId $1 username" % $auth.user.id, username)
+    put(txn, dbi, "userId $# username" % $auth.user.id, username)
     txn.commit()
-    resp Http200, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/plain"}, username
+    resp Http200, "Thank you! You are now known as: $#" % username
 
   post "/publish":
     let auth = request.auth
@@ -136,19 +181,16 @@ $1
       db.exec("ROLLBACK")
       raise
     db.exec("COMMIT")
-    resp Http200, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/plain"}, ""
+    resp Http200, ""
 
   options re".*":
-    resp Http200, {
-      "Access-Control-Allow-Headers":"*",
-      "Access-Control-Allow-Origin":"*",
-      "Access-Control-Allow-Methods":"*"
-    }, ""
+    defaultHeaders()
+    resp Http200
 
   get "/comments.js":
-    #const clientJs = staticRead("client.js")
-    let clientJs = readFile("client.js")
-    resp Http200, {"Access-Control-Allow-Origin":"*", "Content-Type":"application/javascript"}, clientJs
+    #const commentJs = staticRead("client.js")
+    let js = readFile("comments.js")
+    resp Http200, js, "application/javascript"
 
 proc errorHandler(request: Request, error: RouteError): Future[ResponseData] {.async.} =
   block route:
@@ -156,13 +198,13 @@ proc errorHandler(request: Request, error: RouteError): Future[ResponseData] {.a
       of RouteException:
         let e = getCurrentException()
         if e of AuthError:
-          resp Http401, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/plain"}, e.msg
+          resp Http401, e.msg
         elif e of ValueError:
-          resp Http400, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/plain"}, e.msg
+          resp Http400, e.msg
         else:
           echo e.msg
           echo e.getStackTrace
-          resp Http500, {"Access-Control-Allow-Origin":"*", "Content-Type":"text/plain"}, e.msg
+          resp Http500, e.msg
       of RouteCode:
         discard
 

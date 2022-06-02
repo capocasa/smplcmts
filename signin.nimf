@@ -7,7 +7,7 @@
     Email
     <input type="text" name="email" />
   </label>
-  <input type="submit" value="Send one-time password">
-  <small>Your email is not used for anything else</small>
+  <input type="submit" value="Receive a link">
+  <small>Your email address will not be stored</small>
 </form>
 

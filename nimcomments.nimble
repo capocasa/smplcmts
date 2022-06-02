@@ -11,7 +11,7 @@ backend       = "c"
 
 requires "nim >= 1.6.0"
 requires "cligen"
-requires "jester"
+requires "jester#master"
 requires "tiny_sqlite"
 requires "ago"
 requires "lmdb"

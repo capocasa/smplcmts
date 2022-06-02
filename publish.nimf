@@ -2,8 +2,9 @@
 # import format
 # proc formatPublish*(username: string): string =
 <form action="/publish" method="post">
+  <p>Commenting as $username</p>
+  <a href="/signin" method="delete">Stop commenting</a>
   <label>
-    Comment as <span class="username">$username</span>
     <textarea name="comment"></textarea>
     <small>You can ask a question, share an experience, or express yourself your own way.</small>
   </label>
