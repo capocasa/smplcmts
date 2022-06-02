@@ -181,7 +181,7 @@ Please make sure you don't give it to anyone else so no one can comment in your 
       db.exec("ROLLBACK")
       raise
     db.exec("COMMIT")
-    resp Http200, ""
+    resp Http200, "Thank you, you published a comment!"
 
   options re".*":
     defaultHeaders()

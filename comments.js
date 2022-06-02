@@ -9,7 +9,6 @@
   var url = location.protocol + '//' + location.host + location.pathname
   class HTTPException extends Error {}
   async function load(method, path, body) {
-    message.innerText=''
     var params = {}
     params.headers = {}
     params.credentials = 'include'
