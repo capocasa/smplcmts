@@ -39,7 +39,7 @@ dropdb                Delete database. This is destructive.
   of cmdArgument:
     case key:
     of "initdb":
-      initDb()
+      database.connect().initDb()
       quit 0
     of "dropdb":
       dropDb()

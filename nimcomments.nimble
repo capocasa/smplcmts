@@ -15,5 +15,5 @@ requires "jester#master"
 requires "tiny_sqlite"
 requires "ago"
 requires "limdb"
-requires "fusion"
+requires "at"
 

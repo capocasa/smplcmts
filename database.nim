@@ -5,13 +5,12 @@ from os import removeFile
 
 export tiny_sqlite
 
-const dbPath = "nimcomments.sqlite"
+const dbPath* = "nimcomments.sqlite"
+proc connect*(): DbConn =
+  result = openDatabase(dbPath)
+  result.exec("PRAGMA foreign_keys = OFF")
 
-let db* = openDatabase(dbPath)
-
-db.exec("PRAGMA foreign_keys = OFF")
-
-proc initDb*() =
+proc initDb*(db: DbConn) =
   db.execScript("""
     CREATE TABLE user(
       id INTEGER PRIMARY KEY,
