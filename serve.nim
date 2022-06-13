@@ -1,7 +1,7 @@
 import std/[strutils, re, times, tables, options, parseutils, strscans, smtp]
 import jester except error, routeException
 import jester/private/utils
-import types, database, cache, secret
+import types, database, cache, secret, expire
 
 include "comments.nimf"
 include "publish.nimf"
@@ -35,17 +35,20 @@ template redirect(url: string, halt = true) =
   defaultHeaders()
   jester.redirect(url, halt)
 
+expire(txn: LMDBTxn, key: string, expiry: DateTime) =
+  let expireKey = "expiry %s" % key
+
 proc auth(request: Request): Auth =
   result.sessionToken = if request.cookies.hasKey("SessionToken"):
     request.cookies["SessionToken"]
   else:
     raise newException(AuthError, "Please request a comment link by email to start commenting")
 
-  let txn = dbenv.newTxn()
+  let txn = cache.env.newTxn()
   try:
-    let value = get(txn, dbi, "session $#" % saltedHash(result.sessionToken))
+    let value = get(txn, cache.dbi, "session $#" % saltedHash(result.sessionToken))
     discard parseSaturatedNatural(value, result.user.id)
-    result.user.username = get(txn, dbi, "userId $# username" % $result.user.id)
+    result.user.username = get(txn, cache.dbi, "userId $# username" % $result.user.id)
   except:
     raise newException(AuthError, "There is something wrong with your comment link, please request a new one by email")
   finally:
@@ -87,8 +90,8 @@ router comments:
     let authToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
     let email = request.params["email"]
     let url = request.params["url"]
-    let txn = dbenv.newTxn()
-    put(txn, dbi, "signin $#" % saltedHash(authToken), "$# $#" % [saltedHash(email), url])
+    let txn = cache.env.newTxn()
+    put(txn, cache.dbi, "signin $#" % saltedHash(authToken), "$# $#" % [saltedHash(email), url])
     txn.commit()
     let smtp = newAsyncSmtp()
     await smtp.connect("localhost", Port 25)
@@ -110,24 +113,24 @@ Please make sure you don't give it to anyone else so no one can comment in your 
   
   delete "/signin":
     let auth = request.auth
-    let txn = dbenv.newTxn()
+    let txn = cache.env.newTxn()
     let key = "session $#" % saltedHash(auth.sessionToken)
-    let value = get(txn, dbi, key)
-    del(txn, dbi, key, value)
+    let value = get(txn, cache.dbi, key)
+    del(txn, cache.dbi, key, value)
     txn.commit()
     resp Http200, "You are now no longer commenting as $#" % auth.user.username
 
   get "/confirm/@authToken":
     let key = "signin $#" % saltedHash(@"authToken")
-    let txn = dbenv.newTxn()
+    let txn = cache.env.newTxn()
     let value = try:
-      get(txn, dbi, key)
+      get(txn, cache.dbi, key)
     except:
       txn.abort()
       resp Http401, "No link matching this one was sent recently, please check that it is the right one"
     var emailHash, redirectUrl: string
     assert scanf(value, "$+ $+$.", emailHash, redirectUrl), "internal comment email error"
-    del(txn, dbi, key, value)
+    del(txn, cache.dbi, key, value)
     let row = db.one(""" SELECT id, username FROM user WHERE email_hash = ? """, emailHash)
     let user = if row.isSome:
       unpack[User](row.get)
@@ -138,8 +141,8 @@ Please make sure you don't give it to anyone else so no one can comment in your 
       user
 
     let sessionToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
-    put(txn, dbi, "session $#" % saltedHash(sessionToken), $user.id)
-    put(txn, dbi, "userId $# username" % $user.id, user.username)
+    put(txn, cache.dbi, "session $#" % saltedHash(sessionToken), $user.id)
+    put(txn, cache.dbi, "userId $# username" % $user.id, user.username)
     txn.commit()
 
     setCookie("SessionToken", sessionToken, expires=daysForward(7), sameSite=None, httpOnly=true,
@@ -156,8 +159,8 @@ Please make sure you don't give it to anyone else so no one can comment in your 
       db.exec(""" UPDATE user SET username = ? WHERE id = ? """, username, auth.user.id)
     except SqliteError:
       resp Http409, "Someone already chose that name!"
-    let txn = dbenv.newTxn()
-    put(txn, dbi, "userId $# username" % $auth.user.id, username)
+    let txn = cache.env.newTxn()
+    put(txn, cache.dbi, "userId $# username" % $auth.user.id, username)
     txn.commit()
     resp Http200, "Thank you! You are now known as: $#" % username
 
