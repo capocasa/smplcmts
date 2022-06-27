@@ -116,7 +116,35 @@ proc base(request: Request): string =
 router comments:
   get "/comments":
     iterator comments(): Comment =
-      for row in db.iterate(""" SELECT comment.id, timestamp, username, comment, parent_comment_id FROM comment LEFT JOIN user ON comment.user_id=user.id LEFT JOIN url ON comment.url_id=url.id WHERE url=? ORDER BY timestamp """, request.params["url"]):
+      for row in db.iterate("""
+SELECT
+  comment.id,
+  timestamp,
+  user.username,
+  comment,
+  parent_comment_id,
+  GROUP_CONCAT(loved_by.username)
+FROM
+  comment
+LEFT JOIN
+  user
+  ON comment.user_id=user.id
+LEFT JOIN
+  url
+  ON comment.url_id=url.id
+LEFT JOIN
+  love
+  ON love.comment_id=comment.id
+LEFT JOIN
+  user AS loved_by
+  ON love.user_id = loved_by.id
+WHERE
+  url=?
+GROUP BY
+  comment.id
+ORDER BY
+  timestamp
+""", request.params["url"]):
         yield unpack[Comment](row)
     resp Http200, formatComments(comments), "text/html;charset=utf-8"
 
@@ -242,6 +270,22 @@ Please make sure you don't give it to anyone else so no one can comment in your 
     let js = readFile("comments.js")
     resp Http200, js, "application/javascript"
 
+  post "/love/@id":
+    let auth = request.auth
+    try:
+      db.exec("BEGIN")
+      let comment_user_id = db.value(""" SELECT user_id FROM comment WHERE id=? """, @"id")
+      let value = db.value(""" SELECT 1 FROM love WHERE user_id=? AND comment_id=? """, auth.user.id, @"id")
+      if value.isSome:
+        db.exec(""" DELETE FROM love WHERE user_id=? AND comment_id=? """, auth.user.id, @"id")
+      else:
+        db.exec(""" INSERT INTO love (user_id, comment_id) VALUES (?, ?) """, auth.user.id, @"id")
+    except:
+      db.exec("ROLLBACK")
+      raise
+    db.exec("COMMIT")
+    resp Http200
+
 proc errorHandler(request: Request, error: RouteError): Future[ResponseData] {.async.} =
   block route:
     case error.kind:
@@ -258,8 +302,7 @@ proc errorHandler(request: Request, error: RouteError): Future[ResponseData] {.a
           echo e.getStackTrace
           resp Http500, e.msg
       of RouteCode:
-        let e = getCurrentException()
-        resp Http500, e.msg
+        discard
 
 proc serve*(settings: Settings) =
   var jester = initJester(comments, settings=settings)

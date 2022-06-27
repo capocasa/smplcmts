@@ -41,6 +41,13 @@ proc initDb*(db: DbConn) =
     CREATE INDEX idx_comment_user_id ON comment('user_id');
     CREATE INDEX idx_comment_parent_comment_id ON comment('parent_comment_id');
     CREATE INDEX idx_comment_timestamp ON comment('timestamp');
+    CREATE TABLE love(
+      user_id INTEGER NOT NULL,
+      comment_id INTEGER NOT NULL,
+      PRIMARY KEY(user_id, comment_id),
+      FOREIGN KEY(user_id) REFERENCES `user`(id) DEFERRABLE INITIALLY DEFERRED,
+      FOREIGN KEY(comment_id) REFERENCES `comment`(id) DEFERRABLE INITIALLY DEFERRED
+    );
   """)
 
 proc dropDb*(sqlPath: string) =
@@ -57,6 +64,12 @@ proc toDbValue*(w: Weekday): DbValue =
 
 proc fromDbValue*(val: DbValue, T: typedesc[Weekday]): Weekday =
   val.intVal.Weekday
+
+proc fromDbValue*(val: DbValue, T: typedesc[seq[string]]): seq[string]=
+  if val.kind == sqliteNull:
+    @[]
+  else:
+    val.fromDbValue(string).split(' ')
 
 
 # add features to tiny_sqlite

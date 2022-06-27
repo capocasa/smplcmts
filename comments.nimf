@@ -7,6 +7,20 @@
     <div class="name">${ ~comment.name }</div>
     <div class="time">$comment.timestamp.ago</div>
     <div class="comment">${ ~comment.comment }</div>
+    <a class="link" href="#comment-$comment.id">Link</a>
+    <a
+      class="love"
+      href="/love/$comment.id"
+      method="post"
+# if comment.loved_by.len > 0:
+      title="${ comment.loved_by.join(" ") }"
+# end if
+    >
+# if comment.loved_by.len > 0:
+      $comment.loved_by.len
+# end if
+      Love
+    </a>
   </div>
 # end for
 </div>

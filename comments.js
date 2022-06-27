@@ -52,6 +52,16 @@
   })
   container.addEventListener("click", async function (e) {
     if (e.target.tagName != 'A') return true
+    if ( ! e.target.attributes.method ) {
+      switch (e.target.className) {
+        case 'reply':
+          // do reply
+          return true
+        default:
+        case 'link':
+          return true
+      }
+    }
     e.preventDefault()
     e.stopPropagation()
     let href = e.target.attributes.href.value
@@ -59,5 +69,7 @@
     message.innerText = await load(method, href)
     form.outerHTML = await load('get', '/publish')
     form = container.getElementsByTagName('form')[0]
+    comments.outerHTML = await load('get', '/comments?url='+url)
+    comments = container.getElementsByTagName('div')[0]
   })
 })()
