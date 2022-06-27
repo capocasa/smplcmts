@@ -1,11 +1,14 @@
 #? stdtmpl
 # import format
-# proc formatPublish*(username: string): string =
+# proc formatPublish*(username: string, comment: string, parent_id = 0, parent_name = ""): string =
 <form action="/publish" method="post">
   <p>Commenting as $username</p>
   <a href="/signin" method="delete">Stop commenting</a>
+# if parent_id != 0:
+  Reply to <a class="reply" href="#comment-$parent_id">#$parent_name</a> <a class="remove.reply" href="/reply" method="delete">x</a>
+# end if
   <label>
-    <textarea name="comment"></textarea>
+    <textarea name="comment">${ ~comment }</textarea>
     <small>You can ask a question, share an experience, or express yourself your own way.</small>
   </label>
   <input type="submit" value="Publish">

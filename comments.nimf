@@ -21,6 +21,7 @@
 # end if
       Love
     </a>
+    <a class="reply" href="">Reply</a>
   </div>
 # end for
 </div>

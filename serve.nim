@@ -155,7 +155,8 @@ ORDER BY
       resp Http200,  formatSignin(), "text/html;charset=utf-8"
     if auth.user.username == "":
       resp Http200, formatName(), "text/html; charset=utf-8"
-    resp Http200,  formatPublish(auth.user.username), "text/html;charset=utf-8"
+    let key = "cache comment $# $#" % [$auth.user.id, request.params["url"]]
+    resp Http200, formatPublish(auth.user.username, limdb.`[]`(kv, key), 0), "text/html;charset=utf-8"
 
   get "/name":
     resp Http200, formatName(), "text/html;charset=utf-8"
@@ -284,6 +285,17 @@ Please make sure you don't give it to anyone else so no one can comment in your 
       db.exec("ROLLBACK")
       raise
     db.exec("COMMIT")
+    resp Http200
+  
+  put "/cache/comment":
+    let auth = request.auth
+    let key = "cache comment $# $#" % [$auth.user.id, request.params["url"]]
+    kv[key] = request.params["comment"]
+    if expiry.k2t.hasKey(key):
+      # workaround for yet unexplored mixin conflict
+      limdb.del expiry.t2k, limdb.`[]`(expiry.k2t, key)
+      limdb.del expiry.k2t, key
+    expiry[key] = initDuration(days=30)
     resp Http200
 
 proc errorHandler(request: Request, error: RouteError): Future[ResponseData] {.async.} =

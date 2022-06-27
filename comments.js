@@ -28,7 +28,7 @@
   }
   comments.outerHTML = await load('get', '/comments?url='+url)
   comments = container.getElementsByTagName('div')[0]
-  form.outerHTML = await load('get', '/publish')
+  form.outerHTML = await load('get', '/publish?url='+url)
   form = container.getElementsByTagName('form')[0]
   container.addEventListener("submit", async function (e) {
     e.preventDefault()
@@ -39,7 +39,7 @@
       var formdata = new FormData(e.target)
       formdata.set('url', url)
       message.innerText = await load(method, action, formdata)
-      form.outerHTML = await load('get', '/publish')
+      form.outerHTML = await load('get', '/publish=url='+url)
       form = container.getElementsByTagName('form')[0]
       if (action == '/publish') {
         comments.outerHTML = await load('get', '/comments?url='+url)
@@ -67,9 +67,16 @@
     let href = e.target.attributes.href.value
     let method = e.target.attributes.method.value
     message.innerText = await load(method, href)
-    form.outerHTML = await load('get', '/publish')
+    form.outerHTML = await load('get', '/publish?url='+url)
     form = container.getElementsByTagName('form')[0]
     comments.outerHTML = await load('get', '/comments?url='+url)
     comments = container.getElementsByTagName('div')[0]
+  })
+  container.addEventListener("input", async function (e) {
+    if (e.target.tagName != "TEXTAREA") return true
+    await load('put', '/cache/comment', {
+      comment: e.target.value,
+      url: url
+    })
   })
 })()
