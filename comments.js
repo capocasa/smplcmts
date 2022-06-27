@@ -1,6 +1,10 @@
 (async function () {
-  document.write('<section id="comments-section"><div></div><p></p><span></span><form></form></section>')
   var container = document.getElementById('comments-section')
+  if (container == null) {
+    document.write('<section id="comments-section"></div>')
+    container = document.getElementById('comments-section')
+  }
+  container.innerHTML = '<div></div><p></p><span></span><form></form></section>'
   var comments = container.getElementsByTagName('div')[0]
   var form = container.getElementsByTagName('form')[0]
   var message = container.getElementsByTagName('p')[0]

@@ -1,4 +1,4 @@
 nimcomments.sqlite
-nimcomments.cache
+nimcomments.lmdb
 nimcomments
 tags

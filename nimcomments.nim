@@ -1,12 +1,13 @@
 
 import std/[os, strutils]
 import cligen/parseopt3
-import database, serve
+import database, serve, configuration
 
 from jester import newSettings
 from nativesockets import Port
 
 var settings = newSettings()
+var config = initConfig()
 
 var p = initOptParser(shortNoVal = {'v', 'h'}, longNoVal = @["version", "help"])
 for kind, key, val in p.getopt():
@@ -39,10 +40,10 @@ dropdb                Delete database. This is destructive.
   of cmdArgument:
     case key:
     of "initdb":
-      database.connect().initDb()
+      database.initDatabase(config.sqlPath).initDb()
       quit 0
     of "dropdb":
-      dropDb()
+      dropDb(config.sqlPath)
       quit 0
     else:
       stderr.writeLine("Invalid argument '$#'$" % key)

@@ -5,9 +5,8 @@ from os import removeFile
 
 export tiny_sqlite
 
-const dbPath* = "nimcomments.sqlite"
-proc connect*(): DbConn =
-  result = openDatabase(dbPath)
+proc initDatabase*(sqlPath: string): DbConn =
+  result = openDatabase(sqlPath)
   result.exec("PRAGMA foreign_keys = OFF")
 
 proc initDb*(db: DbConn) =
@@ -44,8 +43,8 @@ proc initDb*(db: DbConn) =
     CREATE INDEX idx_comment_timestamp ON comment('timestamp');
   """)
 
-proc dropDb*() =
-  removeFile(dbPath)
+proc dropDb*(sqlPath: string) =
+  removeFile(sqlPath)
 
 proc toDbValue*(t: DateTime): DbValue =
   DbValue(kind: sqliteInteger, intVal: t.toTime.toUnix)

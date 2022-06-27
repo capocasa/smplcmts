@@ -1,7 +1,8 @@
-import std/[strutils, re, times, tables, options, parseutils, strscans, smtp]
+import std/[strutils, re, times, tables, options, parseutils, strscans, smtp, uri]
 import jester except error, routeException
 import jester/private/utils
 import types, database, keyvalue, secret
+import configuration
 
 include "comments.nimf"
 include "publish.nimf"
@@ -14,14 +15,38 @@ type
     user: User
     sessionToken: string
 
-let db* = database.connect()
-let (kv*, at*) = keyvalue.init()
+const
+  config = initConfig()
+
+let
+  db* = database.initDatabase(config.sqlPath)
+  (kv*, expiry*)  = initKeyValue(config.kvPath)
+
+proc base(uri: Uri): string =
+  if uri.scheme != "":
+    result.add uri.scheme
+    result.add ":"
+  if uri.hostname != "":
+    result.add("//")
+    result.add(uri.hostname)
+  if uri.port != "":
+    result.add(":")
+    result.add(uri.port)
+
+proc origin(request: Request): string =
+  try:
+    let u = parseUri(request.headers["referer"])
+    result = u.base
+  except KeyError, ValueError:
+    return "null"
+  if result notin config.allowedOrigins:
+    return "null"  # TODO: error message here
 
 template setHeader(key, value: string) =
   setHeader(result[2], key, value)
 
 template defaultHeaders() =
-  setHeader("Access-Control-Allow-Origin", "http://localhost")
+  setHeader("Access-Control-Allow-Origin", request.origin)
   setHeader("Access-Control-Allow-Credentials", "true")
   setHeader("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
 
@@ -38,7 +63,26 @@ template redirect(url: string, halt = true) =
   defaultHeaders()
   jester.redirect(url, halt)
 
+proc abortIfBanned(ip: string) =
+  ## Enforce IP ban
+  try:
+    let bannedUntil = limdb.`[]`(expiry.k2t, "ban $#" % ip).blobToTime  # TODO: why does keyvalue.`[]` not work, stay ambiguous?
+    let remaining = bannedUntil - getTime()
+    raise newException(AuthError, "Please try again in $# seconds" % $remaining.inSeconds )
+  except KeyError:
+    # no ban, continue
+    discard
+
+template ban(ip: string) =
+  ## Simple short IP ban for any auth failure to prevent brute-forcing session or auth tokens.
+  ## This is feasible because we use really long ones- therefore, no complex schemes like escalating bans
+  ## or captchas are required.
+  expiry["ban $#" % ip] = initDuration(seconds=3)
+
 proc auth(request: Request): Auth =
+
+  request.ip.abortIfBanned
+
   result.sessionToken = if request.cookies.hasKey("SessionToken"):
     request.cookies["SessionToken"]
   else:
@@ -49,8 +93,9 @@ proc auth(request: Request): Auth =
     let value = t["session $#" % saltedHash(result.sessionToken)]
     discard parseSaturatedNatural(value, result.user.id)
     result.user.username = t["userId $# username" % $result.user.id]
-  except:
-    raise newException(AuthError, "There is something wrong with your comment link, please request a new one by email")
+  except KeyError:
+    request.ip.ban
+    raise newException(AuthError, "There is something wrong with your secret comment link, please request a new one by email")
   finally:
     t.reset()
 
@@ -63,6 +108,7 @@ proc base(request: Request): string =
       result.add($request.port)
   else:
     result.add("http://")
+    result.add(request.host)
     if request.port != 80:
       result.add(":")
       result.add($request.port)
@@ -87,15 +133,16 @@ router comments:
     resp Http200, formatName(), "text/html;charset=utf-8"
 
   post "/signin":
+    request.ip.abortIfBanned
     let authToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
     let email = request.params["email"]
     let url = request.params["url"]
     kv["signin $#" % saltedHash(authToken)] = "$# $#" % [saltedHash(email), url]
     let smtp = newAsyncSmtp()
-    await smtp.connect("localhost", Port 25)
-    let link = "$#/confirm/$#" % ["http://localhost:5000", authToken]
+    await smtp.connect(config.mailHost, Port config.mailPort)
+    let link = "$#/confirm/$#" % [request.base, authToken]
     try:
-      await smtp.sendMail("comments@capocasa.net", @[email], $createMessage("Secret Commenting Link", """
+      await smtp.sendMail(config.mailFrom, @[email], $createMessage("Secret Commenting Link", """
 
 Thank you! Please follow this link to start commenting:
 
@@ -108,7 +155,7 @@ Please make sure you don't give it to anyone else so no one can comment in your 
       resp Http409, "The email could not be sent, please take a look at the address."
 
     resp Http200, """Thank you! Please check your email, you're looking for one called "Secret Commenting Link"."""
-  
+
   delete "/signin":
     let auth = request.auth
     let t = kv.initTransaction()
@@ -119,16 +166,18 @@ Please make sure you don't give it to anyone else so no one can comment in your 
     resp Http200, "You are now no longer commenting as $#" % auth.user.username
 
   get "/confirm/@authToken":
-    let key = "signin $#" % saltedHash(@"authToken")
+    request.ip.abortIfBanned
+    let authKey = "signin $#" % saltedHash(@"authToken")
     let t = kv.initTransaction()
-    let value = try:
-      t[key]
+    let authValue = try:
+      t[authKey]
     except:
       t.reset()
+      request.ip.ban
       resp Http401, "No link matching this one was sent recently, please check that it is the right one"
+    t.del authKey, authValue
     var emailHash, redirectUrl: string
-    assert scanf(value, "$+ $+$.", emailHash, redirectUrl), "internal comment email error"
-    t.del key, value
+    assert scanf(authValue, "$+ $+$.", emailHash, redirectUrl), "internal comment email error"
     let row = db.one(""" SELECT id, username FROM user WHERE email_hash = ? """, emailHash)
     let user = if row.isSome:
       unpack[User](row.get)
@@ -139,12 +188,14 @@ Please make sure you don't give it to anyone else so no one can comment in your 
       user
 
     let sessionToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
-    kv["session $#" % saltedHash(sessionToken)] = $user.id
-    kv["userId $# username" % $user.id] = user.username
+    
+    let sessionKey = "session $#" % saltedHash(sessionToken)
+    t[sessionKey] = $user.id
+    t["userId $# username" % $user.id] = user.username
     t.commit()
-
+    expiry[sessionKey] = initDuration(days=7, hours=1) # let cookie expire for security, cleanup token a bit later
     setCookie("SessionToken", sessionToken, expires=daysForward(7), sameSite=None, httpOnly=true,
-              domain="localhost", path="/",)
+              path="/",)
     setHeader("Access-Control-Allow-Headers", "Set-Cookie")
     redirect redirectUrl
 
@@ -196,6 +247,8 @@ proc errorHandler(request: Request, error: RouteError): Future[ResponseData] {.a
     case error.kind:
       of RouteException:
         let e = getCurrentException()
+        if e.isNil:
+          resp Http500, "unknown internal error"
         if e of AuthError:
           resp Http401, e.msg
         elif e of ValueError:
@@ -205,7 +258,8 @@ proc errorHandler(request: Request, error: RouteError): Future[ResponseData] {.a
           echo e.getStackTrace
           resp Http500, e.msg
       of RouteCode:
-        discard
+        let e = getCurrentException()
+        resp Http500, e.msg
 
 proc serve*(settings: Settings) =
   var jester = initJester(comments, settings=settings)

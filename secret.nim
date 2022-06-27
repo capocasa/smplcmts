@@ -10,10 +10,8 @@ proc generatePassword*(length: Natural = 64, ranges: openarray[Slice[char]] = ['
     let span = block:
       var s = 0
       for range in ranges:
-        echo $range
         s += len(range)
       s
-    echo "SPAN ", $span
     # get twice as many random bytes per chunk as we would need statistically,
     # so we mostly only need to call for them once
     let chunksize = 2 * length * 255 div span 
