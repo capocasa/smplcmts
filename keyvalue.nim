@@ -1,8 +1,8 @@
-import asyncdispatch, times
+import asyncdispatch, times, strutils
 
-import limdb, at, at/timeblobs
+import limdb, at
 
-export limdb, at, timeblobs
+export limdb, at
 
 # LimDB requires some boilerplate because it only supports strings
 iterator keys*(a: limdb.Database): Time =
@@ -11,14 +11,16 @@ iterator keys*(a: limdb.Database): Time =
 proc del*(a: limdb.Database, t: Time) =
   a.del t.timeToBlob
 
+# TODO: consider using at's binary serialization
+# with a custom comparison function that sorts these properly
 proc `[]`*(a: limdb.Database, t: Time): string =
-  limdb.`[]`(a, t.timeToBlob)
+  limdb.`[]`(a, $t.toUnixFloat)
 proc `[]`*(a: limdb.Database, s: string): Time =
-  limdb.`[]`(a, s).blobToTime
+  limdb.`[]`(a, s).parseFloat.fromUnixFloat
 proc `[]=`*(a: limdb.Database, t: Time, s: string) =
-  limdb.`[]=`(a, t.timeToBlob, s)
+  limdb.`[]=`(a, $t.toUnixFloat, s)
 proc `[]=`*(a: limdb.Database, s: string, t: Time) =
-  limdb.`[]=`(a, s, t.timeToBlob)
+  limdb.`[]=`(a, s, $t.toUnixFloat)
 
 proc initKeyValue*(kvPath: string):(Database, At[Database, Database]) =
   let kv = initDatabase(kvPath, "kv")

@@ -39,7 +39,7 @@
       var formdata = new FormData(e.target)
       formdata.set('url', url)
       message.innerText = await load(method, action, formdata)
-      form.outerHTML = await load('get', '/publish=url='+url)
+      form.outerHTML = await load('get', '/publish?url='+url)
       form = container.getElementsByTagName('form')[0]
       if (action == '/publish') {
         comments.outerHTML = await load('get', '/comments?url='+url)
@@ -52,16 +52,7 @@
   })
   container.addEventListener("click", async function (e) {
     if (e.target.tagName != 'A') return true
-    if ( ! e.target.attributes.method ) {
-      switch (e.target.className) {
-        case 'reply':
-          // do reply
-          return true
-        default:
-        case 'link':
-          return true
-      }
-    }
+    if ( ! e.target.attributes.method ) return true
     e.preventDefault()
     e.stopPropagation()
     let href = e.target.attributes.href.value

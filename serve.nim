@@ -35,7 +35,7 @@ proc base(uri: Uri): string =
 
 proc origin(request: Request): string =
   try:
-    let u = parseUri(request.headers["referer"])
+    let u = parseUri(request.headers["origin"])
     result = u.base
   except KeyError, ValueError:
     return "null"
@@ -63,6 +63,12 @@ template redirect(url: string, halt = true) =
   defaultHeaders()
   jester.redirect(url, halt)
 
+template shortBan(ip: string) =
+  ## Simple short IP ban for any auth failure to prevent brute-forcing session or auth tokens.
+  ## This is feasible because we use really long ones- therefore, no complex schemes like escalating bans
+  ## or captchas are required.
+  expiry["ban $#" % ip] = initDuration(seconds=3)
+
 proc abortIfBanned(ip: string) =
   ## Enforce IP ban
   try:
@@ -73,18 +79,12 @@ proc abortIfBanned(ip: string) =
     # no ban, continue
     discard
 
-template ban(ip: string) =
-  ## Simple short IP ban for any auth failure to prevent brute-forcing session or auth tokens.
-  ## This is feasible because we use really long ones- therefore, no complex schemes like escalating bans
-  ## or captchas are required.
-  expiry["ban $#" % ip] = initDuration(seconds=3)
-
 proc auth(request: Request): Auth =
 
   request.ip.abortIfBanned
 
-  result.sessionToken = if request.cookies.hasKey("SessionToken"):
-    request.cookies["SessionToken"]
+  result.sessionToken = if request.cookies.hasKey("CommentSessionToken"):
+    request.cookies["CommentSessionToken"]
   else:
     raise newException(AuthError, "Please request a comment link by email to start commenting")
 
@@ -94,10 +94,13 @@ proc auth(request: Request): Auth =
     discard parseSaturatedNatural(value, result.user.id)
     result.user.username = t["userId $# username" % $result.user.id]
   except KeyError:
-    request.ip.ban
-    raise newException(AuthError, "There is something wrong with your secret comment link, please request a new one by email")
-  finally:
     t.reset()
+    request.ip.shortBan
+    raise newException(AuthError, "There is something wrong with your secret comment link, please request a new one by email")
+  except:
+    t.reset()
+    raise
+  t.reset()
 
 proc base(request: Request): string =
   if request.secure:
@@ -146,7 +149,7 @@ ORDER BY
   timestamp
 """, request.params["url"]):
         yield unpack[Comment](row)
-    resp Http200, formatComments(comments), "text/html;charset=utf-8"
+    resp Http200, formatComments(comments, request.params["url"]), "text/html;charset=utf-8"
 
   get "/publish":
     let auth = try:
@@ -155,8 +158,20 @@ ORDER BY
       resp Http200,  formatSignin(), "text/html;charset=utf-8"
     if auth.user.username == "":
       resp Http200, formatName(), "text/html; charset=utf-8"
-    let key = "cache comment $# $#" % [$auth.user.id, request.params["url"]]
-    resp Http200, formatPublish(auth.user.username, limdb.`[]`(kv, key), 0), "text/html;charset=utf-8"
+    let cachedComment = try:
+      limdb.`[]`(kv,"cache $# $# comment" % [$auth.user.id, request.params["url"]])
+    except KeyError:
+      ""
+    let cachedReply = try:
+      limdb.`[]`(kv, "cache $# $# reply" % [$auth.user.id, request.params["url"]])
+    except KeyError:
+      ""
+    let replyName = if cachedReply == "":
+        ""
+      else:
+        db.value(""" SELECT username FROM comment LEFT JOIN user ON user_id=user.id WHERE comment.id=? """, cachedReply).get.fromDbValue(string)
+  
+    resp Http200, formatPublish(auth.user.username, cachedComment, request.params["url"], cachedReply, replyName), "text/html;charset=utf-8"
 
   get "/name":
     resp Http200, formatName(), "text/html;charset=utf-8"
@@ -198,32 +213,39 @@ Please make sure you don't give it to anyone else so no one can comment in your 
     request.ip.abortIfBanned
     let authKey = "signin $#" % saltedHash(@"authToken")
     let t = kv.initTransaction()
-    let authValue = try:
-      t[authKey]
+    var sessionToken, sessionKey: string
+    var emailHash, redirectUrl: string
+    try:
+      db.exec("BEGIN")
+      let authValue = try:
+        t[authKey]
+      except:
+        t.reset()
+        request.ip.shortBan
+        resp Http401, "No link matching this one was sent recently, please check that it is the right one"
+      t.del authKey, authValue
+      assert scanf(authValue, "$+ $+$.", emailHash, redirectUrl), "internal comment email error"
+      let row = db.one(""" SELECT id, username FROM user WHERE email_hash = ? """, emailHash)
+      let user = if row.isSome:
+        unpack[User](row.get)
+      else:
+        db.exec(""" INSERT INTO user (email_hash) VALUES (?) """, emailHash)
+        var user:User
+        user.id = db.lastInsertRowId()
+        user
+
+      sessionToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
+      sessionKey = "session $#" % saltedHash(sessionToken)
+      t[sessionKey] = $user.id
+      t["userId $# username" % $user.id] = user.username
     except:
       t.reset()
-      request.ip.ban
-      resp Http401, "No link matching this one was sent recently, please check that it is the right one"
-    t.del authKey, authValue
-    var emailHash, redirectUrl: string
-    assert scanf(authValue, "$+ $+$.", emailHash, redirectUrl), "internal comment email error"
-    let row = db.one(""" SELECT id, username FROM user WHERE email_hash = ? """, emailHash)
-    let user = if row.isSome:
-      unpack[User](row.get)
-    else:
-      db.exec(""" INSERT INTO user (email_hash) VALUES (?) """, emailHash)
-      var user:User
-      user.id = db.lastInsertRowId()
-      user
-
-    let sessionToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
-    
-    let sessionKey = "session $#" % saltedHash(sessionToken)
-    t[sessionKey] = $user.id
-    t["userId $# username" % $user.id] = user.username
+      db.exec("ROLLBACK")
+      raise
     t.commit()
+    db.exec("COMMIT")
     expiry[sessionKey] = initDuration(days=7, hours=1) # let cookie expire for security, cleanup token a bit later
-    setCookie("SessionToken", sessionToken, expires=daysForward(7), sameSite=None, httpOnly=true,
+    setCookie("CommentSessionToken", sessionToken, expires=daysForward(7), sameSite=None, httpOnly=true,
               path="/",)
     setHeader("Access-Control-Allow-Headers", "Set-Cookie")
     redirect redirectUrl
@@ -245,7 +267,7 @@ Please make sure you don't give it to anyone else so no one can comment in your 
     try:
       db.exec("BEGIN")
       let value = db.value(""" SELECT id FROM url WHERE url = ? """, request.params["url"])
-      let url_id = if value == none(DbValue):
+      let url_id = if value.isNone:
         db.exec(""" INSERT INTO url (url) VALUES (?) """, request.params["url"])
         db.lastInsertRowId()
       else:
@@ -260,6 +282,10 @@ Please make sure you don't give it to anyone else so no one can comment in your 
       db.exec("ROLLBACK")
       raise
     db.exec("COMMIT")
+    
+    for key in ["reply", "comment"]:
+      cache(auth.user.id, request.params["url"], key, "")
+
     resp Http200, "Thank you, you published a comment!"
 
   options re".*":
@@ -269,7 +295,7 @@ Please make sure you don't give it to anyone else so no one can comment in your 
   get "/comments.js":
     #const commentJs = staticRead("client.js")
     let js = readFile("comments.js")
-    resp Http200, js, "application/javascript"
+    jester.resp Http200, js, "application/javascript"
 
   post "/love/@id":
     let auth = request.auth
@@ -286,16 +312,35 @@ Please make sure you don't give it to anyone else so no one can comment in your 
       raise
     db.exec("COMMIT")
     resp Http200
-  
-  put "/cache/comment":
-    let auth = request.auth
-    let key = "cache comment $# $#" % [$auth.user.id, request.params["url"]]
-    kv[key] = request.params["comment"]
-    if expiry.k2t.hasKey(key):
+ 
+  proc cache(user_id: int, url,  key, value: string) =
+    ## cache an ephemeral user-generated value in key-value store
+    ## empty string as value deletes it
+    let cacheKey = "cache $# $# $#" % [$user_id, url, key]
+    if value == "":
+      try:
+        limdb.del(kv, cacheKey)
+      except KeyError:
+        discard
+    else:
+      kv[cacheKey] = value
+    if expiry.k2t.hasKey(cacheKey):
       # workaround for yet unexplored mixin conflict
-      limdb.del expiry.t2k, limdb.`[]`(expiry.k2t, key)
-      limdb.del expiry.k2t, key
-    expiry[key] = initDuration(days=30)
+      limdb.del expiry.t2k, limdb.`[]`(expiry.k2t, cacheKey)
+      limdb.del expiry.k2t, cacheKey
+    if value != "":
+      # if not deleting schedule long expiry
+      expiry[cacheKey] = initDuration(days=30)
+
+  put "/cache/@key":
+    let auth = request.auth
+    case @"key":
+      of "comment", "reply":
+        discard
+      else:
+        resp Http404, "Cannot cache '$#', must be 'comment' or 'reply'" % @"key"
+    cache(auth.user.id, request.params["url"], @"key", request.params[@"key"])
+    
     resp Http200
 
 proc errorHandler(request: Request, error: RouteError): Future[ResponseData] {.async.} =
