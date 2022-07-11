@@ -1,14 +1,17 @@
 #? stdtmpl
 # import format
-# proc formatPublish*(username, comment, url, replyTo, replyName: string): string =
+# proc formatPublish*(username, comment, url: string, replyTo: Option[Comment]): string =
 <form action="/publish" method="post">
   <p>Commenting as $username</p>
   <a href="/signin" method="delete">Stop commenting</a>
-# if replyTo != "":
-  Reply to
-  <a href="#comment-$replyTo" class="username">@$replyName</a>
-  <a class="remove-reply" href="/cache/reply-to?url=$url&reply-to=" method="put">x</a>
-  <input type="hidden" name="reply-to" value="$replyTo" />
+# if replyTo.issome:
+  <a class="publish-reply-to" href="#comment-$replyTo.get.id" >
+    <span class="reply-to-name">${ ~replyTo.get.name }</span>
+    <span class="reply-to-time">$replyTo.get.timestamp.ago</span>
+    <span class="reply-to-comment">${ ~replyTo.get.comment.preview(125) }</span>
+  </a>
+  <a class="remove-reply-to" href="/cache/reply-to?url=$url&reply-to=" method="put">x</a>
+  <input type="hidden" name="reply-to" value="$replyTo.get.id" />
 # end if
   <label>
     <textarea name="comment">${ ~comment }</textarea>

@@ -1,4 +1,4 @@
-import times, options
+import times
 
 type
   User* = object

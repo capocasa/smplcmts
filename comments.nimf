@@ -1,11 +1,14 @@
 #? stdtmpl
 # import format
-# proc formatComments*(comments: iterator: Comment, url: string): string =
+# proc formatComments*(comments: iterator: Comment, url: string, authenticated: bool): string =
 <div id="smplcmts">
 # for comment in comments():
   <div class="comment" id="comment-$comment.id">
 #   if not comment.replyTo.isNil:
-    <div class="comment-reply">
+    <a class="comment-reply-to" href="#comment-$comment.replyTo.id" >
+      <span class="reply-to-name">${ ~comment.replyTo.name }</span>
+      <span class="reply-to-time">$comment.replyTo.timestamp.ago</span>
+      <span class="reply-to-comment">${ ~comment.replyTo.comment.preview(125) }</span>
     </div>
 #   end if
     <div class="comment-name">${ ~comment.name }</div>
@@ -25,7 +28,9 @@
 # end if
       Love
     </a>
+# if authenticated:
     <a class="comment-reply" href="/cache/reply-to?reply-to=$comment.id&url=$url" method="put">Reply</a>
+# end if
   </div>
 # end for
 </div>

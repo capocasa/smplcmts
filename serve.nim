@@ -1,7 +1,7 @@
 import std/[strutils, re, times, tables, options, parseutils, strscans, smtp, uri]
 import jester except error, routeException
 import jester/private/utils
-import types, database, keyvalue, secret
+import types, database, keyvalue, secret, sanitize, serialize
 import configuration
 
 include "comments.nimf"
@@ -162,7 +162,12 @@ ORDER BY
         new(comment.replyTo)
         comment.replyTo[] = unpack[Comment](row, offset, @["id", "timestamp", "username", "comment"])
         yield comment
-    resp Http200, formatComments(comments, request.params["url"]), "text/html;charset=utf-8"
+    let authenticated = try:
+      discard request.auth
+      true
+    except AuthError:
+      false
+    resp Http200, formatComments(comments, request.params["url"], authenticated), "text/html;charset=utf-8"
 
   get "/publish":
     let auth = try:
@@ -176,15 +181,11 @@ ORDER BY
     except KeyError:
       ""
     let cachedReplyTo = try:
-      limdb.`[]`(kv, "cache $# $# reply-to" % [$auth.user.id, request.params["url"]])
+      limdb.`[]`(kv, "cache $# $# reply-to" % [$auth.user.id, request.params["url"]]).unserializeReplyTo().some
     except KeyError:
-      ""
-    let replyToName = if cachedReplyTo == "":
-        ""
-      else:
-        db.value(""" SELECT username FROM comment LEFT JOIN user ON user_id=user.id WHERE comment.id=? """, cachedReplyTo).get.fromDbValue(string)
-  
-    resp Http200, formatPublish(auth.user.username, cachedComment, request.params["url"], cachedReplyTO, replyToName), "text/html;charset=utf-8"
+      none(Comment)
+
+    resp Http200, formatPublish(auth.user.username, cachedComment, request.params["url"], cachedReplyTo), "text/html;charset=utf-8"
 
   get "/name":
     resp Http200, formatName(), "text/html;charset=utf-8"
@@ -194,7 +195,9 @@ ORDER BY
     let authToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
     let email = request.params["email"]
     let url = request.params["url"]
-    kv["signin $#" % saltedHash(authToken)] = "$# $#" % [saltedHash(email), url]
+    let signinKey = "signin $#" % saltedHash(authToken)
+    kv[signinKey] = "$# $#" % [saltedHash(email), url]
+    expiry[signinKey] = initDuration(hours=1)
     let smtp = newAsyncSmtp()
     await smtp.connect(config.mailHost, Port config.mailPort)
     let link = "$#/confirm/$#" % [request.base, authToken]
@@ -267,7 +270,7 @@ Please make sure you don't give it to anyone else so no one can comment in your 
     let auth = request.auth
     if auth.user.username != "":
       resp Http409, "You already chose your name"
-    let username = request.params["username"]
+    let username = request.params["username"].sanitize
     try:
       db.exec(""" UPDATE user SET username = ? WHERE id = ? """, username, auth.user.id)
     except SqliteError:
@@ -288,7 +291,7 @@ Please make sure you don't give it to anyone else so no one can comment in your 
         db.lastInsertRowId()
       else:
         value.get().fromDbValue(int)
-      db.exec(""" INSERT INTO comment (url_id, user_id, comment) VALUES (?, ?, ?) """, url_id, auth.user.id, request.params["comment"])
+      db.exec(""" INSERT INTO comment (url_id, user_id, comment) VALUES (?, ?, ?) """, url_id, auth.user.id, request.params["comment"].sanitize)
       if request.params.hasKey("reply-to"):
         let comment_id = db.lastInsertRowId()
         var reply_to: Natural
@@ -325,7 +328,7 @@ Please make sure you don't give it to anyone else so no one can comment in your 
     db.exec("COMMIT")
     resp Http200
  
-  proc cache(user_id: int, url,  key, value: string) =
+  proc cache(user_id: int, url, key, value: string) =
     ## cache an ephemeral user-generated value in key-value store
     ## empty string as value deletes it
     let cacheKey = "cache $# $# $#" % [$user_id, url, key]
@@ -346,13 +349,26 @@ Please make sure you don't give it to anyone else so no one can comment in your 
 
   put "/cache/@key":
     let auth = request.auth
-    case @"key":
-      of "comment", "reply-to":
-        discard
-      else:
-        resp Http404, "Cannot cache '$#', must be 'comment' or 'reply-to'" % @"key"
-    cache(auth.user.id, request.params["url"], @"key", request.params[@"key"])
-    
+    let key = @"key"
+    case key:
+    of "comment", "reply-to":
+      discard
+    else:
+      resp Http404, "Cannot cache '$#', must be 'comment' or 'reply-to'" % @"key"
+    let value = request.params[key]
+
+    if key == "reply-to" and value.len > 0:
+      # reply-to: cache entire reply
+      let row = db.one(""" SELECT comment.id, timestamp, username, comment FROM comment LEFT JOIN user ON user_id=user.id WHERE comment.id=? """, value)
+      if row.isNone:
+        resp Http409, "reply-to with id $# not found" % value
+      var offset = 0
+      let replyTo = unpack[Comment](row.get, offset, @["id", "timestamp", "name", "comment"])
+      cache(auth.user.id, request.params["url"], key, replyTo.serializeReplyTo())
+    else:
+      # default: just cache the value as string
+      cache(auth.user.id, request.params["url"], key, value)
+
     resp Http200
 
 proc errorHandler(request: Request, error: RouteError): Future[ResponseData] {.async.} =
