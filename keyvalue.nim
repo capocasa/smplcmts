@@ -7,9 +7,9 @@ export limdb, at
 # LimDB requires some boilerplate because it only supports strings
 iterator keys*(a: limdb.Database): Time =
   for k in limdb.keys(a):
-    yield k.blobToTime
+    yield k.parseFloat.fromUnixFloat
 proc del*(a: limdb.Database, t: Time) =
-  a.del t.timeToBlob
+  a.del $t.toUnixFloat
 
 # TODO: consider using at's binary serialization
 # with a custom comparison function that sorts these properly

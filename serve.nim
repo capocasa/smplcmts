@@ -72,7 +72,7 @@ template shortBan(ip: string) =
 proc abortIfBanned(ip: string) =
   ## Enforce IP ban
   try:
-    let bannedUntil = limdb.`[]`(expiry.k2t, "ban $#" % ip).blobToTime  # TODO: why does keyvalue.`[]` not work, stay ambiguous?
+    let bannedUntil = limdb.`[]`(expiry.k2t, "ban $#" % ip).parseFloat.fromUnixFloat # TODO: why does keyvalue.`[]` not work, stay ambiguous?
     let remaining = bannedUntil - getTime()
     raise newException(AuthError, "Please try again in $# seconds" % $remaining.inSeconds )
   except KeyError:
@@ -122,11 +122,14 @@ router comments:
       for row in db.iterate("""
 SELECT
   comment.id,
-  timestamp,
+  comment.timestamp,
   user.username,
-  comment,
-  parent_comment_id,
-  GROUP_CONCAT(loved_by.username)
+  comment.comment,
+  GROUP_CONCAT(loved_by.username),
+  reply_to.id,
+  reply_to.timestamp,
+  replyee.username,
+  reply_to.comment
 FROM
   comment
 LEFT JOIN
@@ -141,14 +144,24 @@ LEFT JOIN
 LEFT JOIN
   user AS loved_by
   ON love.user_id = loved_by.id
+LEFT JOIN
+  comment AS reply_to
+  ON reply_to.id = comment.reply_to
+LEFT JOIN
+  user AS replyee
+  ON user.id=reply_to.user_id
 WHERE
   url=?
 GROUP BY
   comment.id
 ORDER BY
-  timestamp
+  comment.timestamp,user.username
 """, request.params["url"]):
-        yield unpack[Comment](row)
+        var offset = 0
+        var comment = unpack[Comment](row, offset, @["id", "timestamp", "name", "comment", "lovedBy"])
+        new(comment.replyTo)
+        comment.replyTo[] = unpack[Comment](row, offset, @["id", "timestamp", "username", "comment"])
+        yield comment
     resp Http200, formatComments(comments, request.params["url"]), "text/html;charset=utf-8"
 
   get "/publish":
@@ -162,16 +175,16 @@ ORDER BY
       limdb.`[]`(kv,"cache $# $# comment" % [$auth.user.id, request.params["url"]])
     except KeyError:
       ""
-    let cachedReply = try:
-      limdb.`[]`(kv, "cache $# $# reply" % [$auth.user.id, request.params["url"]])
+    let cachedReplyTo = try:
+      limdb.`[]`(kv, "cache $# $# reply-to" % [$auth.user.id, request.params["url"]])
     except KeyError:
       ""
-    let replyName = if cachedReply == "":
+    let replyToName = if cachedReplyTo == "":
         ""
       else:
-        db.value(""" SELECT username FROM comment LEFT JOIN user ON user_id=user.id WHERE comment.id=? """, cachedReply).get.fromDbValue(string)
+        db.value(""" SELECT username FROM comment LEFT JOIN user ON user_id=user.id WHERE comment.id=? """, cachedReplyTo).get.fromDbValue(string)
   
-    resp Http200, formatPublish(auth.user.username, cachedComment, request.params["url"], cachedReply, replyName), "text/html;charset=utf-8"
+    resp Http200, formatPublish(auth.user.username, cachedComment, request.params["url"], cachedReplyTO, replyToName), "text/html;charset=utf-8"
 
   get "/name":
     resp Http200, formatName(), "text/html;charset=utf-8"
@@ -264,6 +277,9 @@ Please make sure you don't give it to anyone else so no one can comment in your 
 
   post "/publish":
     let auth = request.auth
+    for k in request.params.keys:
+      if k notin ["reply-to"]:
+        raise newException(ValueError, "Invalid key $#" % k)
     try:
       db.exec("BEGIN")
       let value = db.value(""" SELECT id FROM url WHERE url = ? """, request.params["url"])
@@ -273,11 +289,12 @@ Please make sure you don't give it to anyone else so no one can comment in your 
       else:
         value.get().fromDbValue(int)
       db.exec(""" INSERT INTO comment (url_id, user_id, comment) VALUES (?, ?, ?) """, url_id, auth.user.id, request.params["comment"])
-      if request.params.hasKey("parent_comment_id"):
+      if request.params.hasKey("reply-to"):
         let comment_id = db.lastInsertRowId()
-        var parent_comment_id: Natural
-        discard parseSaturatedNatural(request.params["parent_comment_id"], parent_comment_id)
-        db.exec(""" UPDATE comment SET parent_comment_id = ? WHERE id = ? """, parent_comment_id, comment_id)
+        var reply_to: Natural
+        discard parseSaturatedNatural(request.params["reply_to"], reply_to)
+        db.exec(""" UPDATE comment SET reply_to = ? WHERE id = ? """, reply_to, comment_id)
+        echo "update ", reply_to, " ", comment_id
     except:
       db.exec("ROLLBACK")
       raise
@@ -291,11 +308,6 @@ Please make sure you don't give it to anyone else so no one can comment in your 
   options re".*":
     defaultHeaders()
     resp Http200
-
-  get "/comments.js":
-    #const commentJs = staticRead("client.js")
-    let js = readFile("comments.js")
-    jester.resp Http200, js, "application/javascript"
 
   post "/love/@id":
     let auth = request.auth
@@ -335,10 +347,10 @@ Please make sure you don't give it to anyone else so no one can comment in your 
   put "/cache/@key":
     let auth = request.auth
     case @"key":
-      of "comment", "reply":
+      of "comment", "reply-to":
         discard
       else:
-        resp Http404, "Cannot cache '$#', must be 'comment' or 'reply'" % @"key"
+        resp Http404, "Cannot cache '$#', must be 'comment' or 'reply-to'" % @"key"
     cache(auth.user.id, request.params["url"], @"key", request.params[@"key"])
     
     resp Http200

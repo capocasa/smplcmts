@@ -1,15 +1,19 @@
 #? stdtmpl
 # import format
 # proc formatComments*(comments: iterator: Comment, url: string): string =
-<div id="all-comments">
+<div id="smplcmts">
 # for comment in comments():
   <div class="comment" id="comment-$comment.id">
-    <div class="name">${ ~comment.name }</div>
-    <div class="time">$comment.timestamp.ago</div>
-    <div class="comment">${ ~comment.comment }</div>
-    <a class="link" href="#comment-$comment.id">Link</a>
+#   if not comment.replyTo.isNil:
+    <div class="comment-reply">
+    </div>
+#   end if
+    <div class="comment-name">${ ~comment.name }</div>
+    <div class="comment-time">$comment.timestamp.ago</div>
+    <div class="comment-comment">${ ~comment.comment }</div>
+    <a class="comment-link" href="#comment-$comment.id">Link</a>
     <a
-      class="love"
+      class="comment-love"
       href="/love/$comment.id"
       method="post"
 # if comment.loved_by.len > 0:
@@ -21,7 +25,7 @@
 # end if
       Love
     </a>
-    <a class="reply" href="/cache/reply?reply=$comment.id&url=$url" method="put">Reply</a>
+    <a class="comment-reply" href="/cache/reply-to?reply-to=$comment.id&url=$url" method="put">Reply</a>
   </div>
 # end for
 </div>

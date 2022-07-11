@@ -7,8 +7,8 @@
 # if replyTo != "":
   Reply to
   <a href="#comment-$replyTo" class="username">@$replyName</a>
-  <a class="remove-reply" href="/cache/reply?url=$url&reply=" method="put">x</a>
-  <input type="hidden" name="parent_comment_id" value="$replyTo" />
+  <a class="remove-reply" href="/cache/reply-to?url=$url&reply-to=" method="put">x</a>
+  <input type="hidden" name="reply-to" value="$replyTo" />
 # end if
   <label>
     <textarea name="comment">${ ~comment }</textarea>

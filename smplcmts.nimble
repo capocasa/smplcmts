@@ -2,9 +2,9 @@
 
 version       = "0.1.0"
 author        = "Carlo Capocasa"
-description   = "A simple website comment system written in Nim"
+description   = "A simple and lightweight yet powerful and usable website comment system"
 license       = "MIT"
-bin           = @["nimcomments"]
+bin           = @["smplcmts"]
 backend       = "c"
 
 # Dependencies

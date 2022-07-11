@@ -13,8 +13,8 @@ proc initConfig*(): Config =
   result.mailHost = "localhost"
   result.mailPort = 25.Port
   result.mailFrom = "comments@capocasa.net"
-  result.sqlPath = "nimcomments.sqlite"
-  result.kvPath = "nimcomments.lmdb"
+  result.sqlPath = "smplcmts.sqlite"
+  result.kvPath = "smplcmts.lmdb"
   result.allowedOrigins = @["http://localhost"]
 
 
