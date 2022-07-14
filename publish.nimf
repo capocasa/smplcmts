@@ -1,22 +1,20 @@
 #? stdtmpl
 # import format
 # proc formatPublish*(username, comment, url: string, replyTo: Option[Comment]): string =
-<form action="/publish" method="post">
-  <p>Commenting as $username</p>
-  <a href="/signin" method="delete">Stop commenting</a>
+<form action="/publish" method="post" class="publish">
+  <small>Commenting as</small>
+  <strong>$username</strong>
+  <a href="/signin" method="delete" class="icon logout"></a>
 # if replyTo.issome:
-  <a class="publish-reply-to" href="#comment-$replyTo.get.id" >
-    <span class="reply-to-name">${ ~replyTo.get.name }</span>
-    <span class="reply-to-time">$replyTo.get.timestamp.ago</span>
-    <span class="reply-to-comment">${ ~replyTo.get.comment.preview(125) }</span>
-  </a>
-  <a class="remove-reply-to" href="/cache/reply-to?url=$url&reply-to=" method="put">x</a>
+    <blockquote>
+      <small>Replying to</small>
+      <strong>${ ~replyTo.get.name }</strong>
+      <a href="/cache/reply-to?url=$url&reply-to=" method="put" class="icon remove"></a>
+      <kbd>${ ~replyTo.get.comment.preview(125) }</kbd>
+    </blockquote>
   <input type="hidden" name="reply-to" value="$replyTo.get.id" />
 # end if
-  <label>
-    <textarea name="comment">${ ~comment }</textarea>
-    <small>You can ask a question, share an experience, or express yourself your own way.</small>
-  </label>
+  <textarea name="comment" placeholder="What would you like to know? What do you know that you would like to share?">${ ~comment }</textarea>
   <input type="submit" value="Publish">
 </form>
 

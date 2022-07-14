@@ -159,8 +159,9 @@ ORDER BY
 """, request.params["url"]):
         var offset = 0
         var comment = unpack[Comment](row, offset, @["id", "timestamp", "name", "comment", "lovedBy"])
-        new(comment.replyTo)
-        comment.replyTo[] = unpack[Comment](row, offset, @["id", "timestamp", "username", "comment"])
+        if row[5].fromDbValue(Option[int]).isSome:
+          new(comment.replyTo)
+          comment.replyTo[] = unpack[Comment](row, offset, @["id", "timestamp", "name", "comment"])
         yield comment
     let authenticated = try:
       discard request.auth
@@ -281,7 +282,7 @@ Please make sure you don't give it to anyone else so no one can comment in your 
   post "/publish":
     let auth = request.auth
     for k in request.params.keys:
-      if k notin ["reply-to"]:
+      if k notin ["reply-to", "comment", "url"]:
         raise newException(ValueError, "Invalid key $#" % k)
     try:
       db.exec("BEGIN")
@@ -293,11 +294,10 @@ Please make sure you don't give it to anyone else so no one can comment in your 
         value.get().fromDbValue(int)
       db.exec(""" INSERT INTO comment (url_id, user_id, comment) VALUES (?, ?, ?) """, url_id, auth.user.id, request.params["comment"].sanitize)
       if request.params.hasKey("reply-to"):
-        let comment_id = db.lastInsertRowId()
-        var reply_to: Natural
-        discard parseSaturatedNatural(request.params["reply_to"], reply_to)
-        db.exec(""" UPDATE comment SET reply_to = ? WHERE id = ? """, reply_to, comment_id)
-        echo "update ", reply_to, " ", comment_id
+        let commentId = db.lastInsertRowId()
+        var replyTo: Natural
+        discard parseSaturatedNatural(request.params["reply-to"], replyTo)
+        db.exec(""" UPDATE comment SET reply_to = ? WHERE id = ? """, replyTo, commentId)
     except:
       db.exec("ROLLBACK")
       raise

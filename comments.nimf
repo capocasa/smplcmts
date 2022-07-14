@@ -1,36 +1,47 @@
 #? stdtmpl
 # import format
 # proc formatComments*(comments: iterator: Comment, url: string, authenticated: bool): string =
-<div id="smplcmts">
+<div class="comments">
 # for comment in comments():
   <div class="comment" id="comment-$comment.id">
 #   if not comment.replyTo.isNil:
-    <a class="comment-reply-to" href="#comment-$comment.replyTo.id" >
-      <span class="reply-to-name">${ ~comment.replyTo.name }</span>
-      <span class="reply-to-time">$comment.replyTo.timestamp.ago</span>
-      <span class="reply-to-comment">${ ~comment.replyTo.comment.preview(125) }</span>
-    </div>
+      <a class="reply-to" href="#comment-$comment.replyTo.id">
+        <blockquote>
+          <small>Reply to</small>
+          <strong>${ ~comment.replyTo.name }</strong>
+          <kbd>${ ~comment.replyTo.comment.preview(125) }</kbd>
+        </blockquote>
+      </a>
 #   end if
-    <div class="comment-name">${ ~comment.name }</div>
-    <div class="comment-time">$comment.timestamp.ago</div>
-    <div class="comment-comment">${ ~comment.comment }</div>
-    <a class="comment-link" href="#comment-$comment.id">Link</a>
+    <strong>${ ~comment.name }</strong>
+    <time>$comment.timestamp.ago</time>
+    <kbd>${ ~comment.comment }</kbd>
+# if authenticated:
+    <a href="/cache/reply-to?reply-to=$comment.id&url=$url" method="put" class="icon reply"></a>
+# end if
+# if authenticated:
     <a
-      class="comment-love"
       href="/love/$comment.id"
       method="post"
-# if comment.loved_by.len > 0:
-      title="${ comment.loved_by.join(" ") }"
+# else:
+    <span
+# end if
+# if comment.lovedBy.len > 0:
+      title="${ comment.lovedBy.join(" ") }"
+      class="loved"
+# else:
+      class="icon lovable"
 # end if
     >
-# if comment.loved_by.len > 0:
-      $comment.loved_by.len
+# if comment.lovedBy.len > 0:
+      $comment.lovedBy.len <span class="icon loved"></span>
 # end if
-      Love
-    </a>
 # if authenticated:
-    <a class="comment-reply" href="/cache/reply-to?reply-to=$comment.id&url=$url" method="put">Reply</a>
+    </a>
+# else:
+    </span>
 # end if
+    <a href="#comment-$comment.id" class="icon link"></a>
   </div>
 # end for
 </div>

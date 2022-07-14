@@ -109,10 +109,10 @@ template unpack*[T: object](row: ResultRow, offset = 0): T =
   # workaround- how the heck do I write a static[seq[string]] literal
   # to supply as default value for the proc below? TODO: find out
   const skip: seq[string] = @[]
-  unpack[T](row, offset, skip)
+  var o = offset
+  unpack[T](row, o, skip)
 
-proc unpack*[T: object](row: ResultRow, offset = 0, limit_to: static[seq[string]]): T =
-  var offset = offset
+proc unpack*[T: object](row: ResultRow, offset: var int, limit_to: static[seq[string]]): T =
   for name, value in fieldPairs result:
     when limit_to.len == 0 or name in limit_to:
       value = row[offset].fromDbValue(type(value))

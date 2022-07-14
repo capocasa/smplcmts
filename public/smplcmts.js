@@ -1,10 +1,10 @@
 (async function () {
-  var container = document.getElementById('comments-section')
+  var container = document.getElementById('smplcmts')
   if (container == null) {
-    document.write('<section id="comments-section"></div>')
-    container = document.getElementById('comments-section')
+    document.write('<section id="smplcmts"></div>')
+    container = document.getElementById('smplcmts')
   }
-  container.innerHTML = '<div></div><p></p><span></span><form></form></section>'
+  container.innerHTML = '<div></div><p></p><form></form>'
   var comments = container.getElementsByTagName('div')[0]
   var form = container.getElementsByTagName('form')[0]
   var message = container.getElementsByTagName('p')[0]
@@ -51,12 +51,18 @@
     }
   })
   container.addEventListener("click", async function (e) {
-    if (e.target.tagName != 'A') return true
-    if ( ! e.target.attributes.method ) return true
+    var target
+    if (e.target.tagName == 'A')
+      target = e.target
+    else if (e.target.parentNode.tagName == 'A')
+      target = e.target.parentNode
+    else
+      return true
+    if ( ! target.attributes.method ) return true
     e.preventDefault()
     e.stopPropagation()
-    let href = e.target.attributes.href.value
-    let method = e.target.attributes.method.value
+    let href = target.attributes.href.value
+    let method = target.attributes.method.value
     message.innerText = await load(method, href)
     form.outerHTML = await load('get', '/publish?url='+url)
     form = container.getElementsByTagName('form')[0]
