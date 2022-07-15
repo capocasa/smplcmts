@@ -58,7 +58,24 @@
       target = e.target.parentNode
     else
       return true
-    if ( ! target.attributes.method ) return true
+    if ( ! target.attributes.method ) {
+      if (target.classList.contains("share")) {
+        e.preventDefault()
+        e.stopPropagation()
+        navigator.clipboard.writeText(window.location.href.split('#')[0] + target.attributes.href.value)
+        target.classList.add("copied")
+        if (target.timeout) {
+          clearTimeout(target.timeout)
+          delete target.timeout
+        }
+        target.timeout = setTimeout(() => {
+          target.classList.remove("copied")
+          delete target.timeout
+        }, 3000)
+        return false
+      }
+      return true
+    }
     e.preventDefault()
     e.stopPropagation()
     let href = target.attributes.href.value

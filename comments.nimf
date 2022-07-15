@@ -41,7 +41,7 @@
 # else:
     </span>
 # end if
-    <a href="#comment-$comment.id" class="icon link"></a>
+    <a href="#comment-$comment.id" class="icon share"></a>
   </div>
 # end for
 </div>

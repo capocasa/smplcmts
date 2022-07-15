@@ -20,7 +20,7 @@ const
 
 let
   db* = database.initDatabase(config.sqlPath)
-  (kv*, expiry*)  = initKeyValue(config.kvPath)
+  (kv*, expiry*) = initKeyValue(config.kvPath)
 
 proc base(uri: Uri): string =
   if uri.scheme != "":
@@ -67,14 +67,16 @@ template shortBan(ip: string) =
   ## Simple short IP ban for any auth failure to prevent brute-forcing session or auth tokens.
   ## This is feasible because we use really long ones- therefore, no complex schemes like escalating bans
   ## or captchas are required.
-  expiry["ban $#" % ip] = initDuration(seconds=3)
+  {.cast(gcsafe)}:
+    expiry["ban $#" % ip] = initDuration(seconds=3)
 
 proc abortIfBanned(ip: string) =
   ## Enforce IP ban
   try:
-    let bannedUntil = limdb.`[]`(expiry.k2t, "ban $#" % ip).parseFloat.fromUnixFloat # TODO: why does keyvalue.`[]` not work, stay ambiguous?
-    let remaining = bannedUntil - getTime()
-    raise newException(AuthError, "Please try again in $# seconds" % $remaining.inSeconds )
+    {.cast(gcsafe)}:
+      let bannedUntil = limdb.`[]`(expiry.k2t, "ban $#" % ip).parseFloat.fromUnixFloat # TODO: why does keyvalue.`[]` not work, stay ambiguous?
+      let remaining = bannedUntil - getTime()
+      raise newException(AuthError, "Please try again in $# seconds" % $remaining.inSeconds )
   except KeyError:
     # no ban, continue
     discard
