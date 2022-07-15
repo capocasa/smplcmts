@@ -1,7 +1,7 @@
 #? stdtmpl
 # import format
 # proc formatPublish*(username, comment, url: string, replyTo: Option[Comment]): string =
-<form action="/publish" method="post" class="publish">
+<form id="comment-form" action="/publish" method="post" class="publish">
   <small>Commenting as</small>
   <strong>$username</strong>
   <a href="/signin" method="delete" class="icon logout"></a>

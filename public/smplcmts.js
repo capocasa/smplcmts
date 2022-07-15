@@ -4,10 +4,10 @@
     document.write('<section id="smplcmts"></div>')
     container = document.getElementById('smplcmts')
   }
-  container.innerHTML = '<div></div><p></p><form></form>'
+  container.innerHTML = '<div></div><mark></mark><form></form>'
   var comments = container.getElementsByTagName('div')[0]
   var form = container.getElementsByTagName('form')[0]
-  var message = container.getElementsByTagName('p')[0]
+  var message = container.getElementsByTagName('mark')[0]
   var script = new URL(document.currentScript.src)
   var base = script.protocol + '//' + script.host
   var url = location.protocol + '//' + location.host + location.pathname
@@ -85,6 +85,9 @@
     form = container.getElementsByTagName('form')[0]
     comments.outerHTML = await load('get', '/comments?url='+url)
     comments = container.getElementsByTagName('div')[0]
+    if (target.classList.contains("reply")) {
+      window.location.hash = "comment-form"
+    }
   })
   container.addEventListener("input", async function (e) {
     if (e.target.tagName != "TEXTAREA") return true

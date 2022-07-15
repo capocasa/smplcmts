@@ -79,6 +79,16 @@
   margin-top: 0.13em;
 }
 
+#smplcmts > mark {
+  padding: 1em;
+  margin: 1em;
+  font-style: italic; 
+}
+
+#smplcmts > mark:empty {
+  display: none;
+}
+
 #smplcmts form input[type=text] {
   padding: 0.5em;
   margin: 1em 0 1.5em 0;
@@ -88,7 +98,12 @@
 }
 
 #smplcmts strong {
-  margin: 0 auto 0 0.25em;
+  margin: 0 auto 0 0em;
+}
+
+#smplcmts form > strong,
+#smplcmts blockquote > strong {
+  margin-left: 0.25em;
 }
 
 #smplcmts form p {
@@ -123,6 +138,7 @@
 
 #smplcmts .icon {
   background-size: contain;
+  background-repeat: no-repeat;
   display: inline-block;
   vertical-align: top;
   height: 1.25em;
@@ -137,8 +153,6 @@
 
 #smplcmts .icon.reply {
   margin-left: auto;
-  margin-top: 0.3em;
-  margin-bottom: 0; 
 }
 
 #smplcmts .lovable {
@@ -155,6 +169,8 @@
 
 #smplcmts .icon.remove {
   order: 0;
+  height: 1.55em;
+  width: 1em;
 }
 
 #smplcmts a.logout {

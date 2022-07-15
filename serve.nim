@@ -267,7 +267,7 @@ Please make sure you don't give it to anyone else so no one can comment in your 
     setCookie("CommentSessionToken", sessionToken, expires=daysForward(7), sameSite=None, httpOnly=true,
               path="/",)
     setHeader("Access-Control-Allow-Headers", "Set-Cookie")
-    redirect redirectUrl
+    redirect redirectUrl & "#comment-form"
 
   post "/name":
     let auth = request.auth
