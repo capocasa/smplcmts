@@ -1,7 +1,7 @@
 #? stdtmpl
 # import format
 # proc formatSignin*(): string =
-<form action="/signin" method="post">
+<form id="comment-form" action="/signin" method="post">
   <p>Would you like to make a comment?</p>
   <input type="text" name="email" placeholder="Email" />
   <input type="submit" value="Receive a link">

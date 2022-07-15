@@ -1,4 +1,4 @@
-import std/[strutils, re, times, tables, options, parseutils, strscans, smtp, uri]
+import std/[strutils, re, times, tables, options, parseutils, strscans, smtp, uri, logging, sequtils]
 import jester except error, routeException
 import jester/private/utils
 import types, database, keyvalue, secret, sanitize, serialize
@@ -119,15 +119,23 @@ proc base(request: Request): string =
       result.add($request.port)
 
 router comments:
+
   get "/comments":
+    let authUserId = try:
+      request.auth.user.id.int
+    except AuthError:
+      -1
     iterator comments(): Comment =
+      # note the delimiter ascii-31 is used which is not allowed
+      # by the sanitizer and historic usage fits well semantically
       for row in db.iterate("""
 SELECT
   comment.id,
   comment.timestamp,
   user.username,
   comment.comment,
-  GROUP_CONCAT(loved_by.username),
+  GROUP_CONCAT(loved_by.username, CHAR(31)), 
+  COALESCE(MAX(loved_by.id = ?), 0),
   reply_to.id,
   reply_to.timestamp,
   replyee.username,
@@ -158,10 +166,12 @@ GROUP BY
   comment.id
 ORDER BY
   comment.timestamp,user.username
-""", request.params["url"]):
+""", authUserId, request.params["url"]):
         var offset = 0
-        var comment = unpack[Comment](row, offset, @["id", "timestamp", "name", "comment", "lovedBy"])
-        if row[5].fromDbValue(Option[int]).isSome:
+        var comment = unpack[Comment](row, offset, @["id", "timestamp", "name", "comment", "lovedBy", "lovedByMe"])
+        # sqlite could do this with GROUP_CONCAT(DISTINCT ...) but then the delimiter would have to be the default ,
+        comment.lovedBy = comment.lovedBy.deduplicate
+        if row[offset].fromDbValue(Option[int]).isSome:
           new(comment.replyTo)
           comment.replyTo[] = unpack[Comment](row, offset, @["id", "timestamp", "name", "comment"])
         yield comment
@@ -385,8 +395,8 @@ proc errorHandler(request: Request, error: RouteError): Future[ResponseData] {.a
         elif e of ValueError:
           resp Http400, e.msg
         else:
-          echo e.msg
-          echo e.getStackTrace
+          logging.debug e.msg
+          logging.debug e.getStackTrace
           resp Http500, e.msg
       of RouteCode:
         discard

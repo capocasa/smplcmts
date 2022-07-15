@@ -101,7 +101,7 @@ proc fromDbValue*(val: DbValue, T: typedesc[seq[string]]): seq[string]=
   if val.kind == sqliteNull:
     @[]
   else:
-    val.fromDbValue(string).split(' ')
+    val.fromDbValue(string).split(chr(31))
 
 # add features to tiny_sqlite
 

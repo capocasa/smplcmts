@@ -14,7 +14,7 @@
     </blockquote>
   <input type="hidden" name="reply-to" value="$replyTo.get.id" />
 # end if
-  <textarea name="comment" placeholder="What would you like to know? What do you know that you would like to share?">${ ~comment }</textarea>
+  <textarea name="comment" placeholder="Write your comment">${ ~comment }</textarea>
   <input type="submit" value="Publish">
 </form>
 

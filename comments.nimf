@@ -28,13 +28,25 @@
 # end if
 # if comment.lovedBy.len > 0:
       title="${ comment.lovedBy.join(" ") }"
-      class="loved"
+# if comment.lovedByMe:
+      class="loved count"
+# else:
+      class="lovable count"
+# end if
 # else:
       class="icon lovable"
 # end if
     >
 # if comment.lovedBy.len > 0:
-      $comment.lovedBy.len <span class="icon loved"></span>
+      $comment.lovedBy.len
+      <span
+# if comment.lovedByMe:
+        class="icon loved"
+# else:
+        class="icon lovable"
+# end if
+      >
+      </span>
 # end if
 # if authenticated:
     </a>

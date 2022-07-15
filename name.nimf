@@ -1,12 +1,10 @@
 #? stdtmpl
 # import format
 # proc formatName*(): string =
-<form action="/name" method="post">
-  <label>
-    Name
-    <input type="text" name="username" value="" />
-    <small>Please choose your name</small>
-    <input type="submit" value="Make it so">
-  </label>
+<form id="comment-form" action="/name" method="post">
+  <p>Please choose a name you want to comment with</p>
+  <input type="text" name="username" placeholder="Name" value="" />
+  <input type="submit" value="Make it so">
+  <small>Your name cannot be changed later</small>
 </form>
 

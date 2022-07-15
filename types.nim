@@ -11,5 +11,6 @@ type
     name*: string
     comment*: string
     lovedBy*: seq[string]
+    lovedByMe*: bool
     replyTo*: ref Comment
 

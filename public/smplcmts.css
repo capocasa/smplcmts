@@ -155,15 +155,18 @@
   margin-left: auto;
 }
 
-#smplcmts .lovable {
+#smplcmts .comment > .lovable,
+#smplcmts .comment > .loved {
   margin-left: 1.375em;
   margin-right: 1.375em;
 }
 
-#smplcmts .comment > .loved {
-  width: 4em;
-  margin: 0;
-  text-align: center;
+#smplcmts .comment > .loved.count,
+#smplcmts .comment > .lovable.count {
+  line-height: 1.25em;
+  width: 2.625em;
+  margin: 0 1.375em 0 0;
+  text-align: right;
   height: 1em;
 }
 
