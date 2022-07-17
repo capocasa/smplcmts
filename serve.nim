@@ -304,7 +304,7 @@ Please make sure you don't give it to anyone else so no one can comment in your 
         db.lastInsertRowId()
       else:
         value.get().fromDbValue(int)
-      db.exec(""" INSERT INTO comment (url_id, user_id, comment) VALUES (?, ?, ?) """, url_id, auth.user.id, request.params["comment"].sanitize)
+      db.exec(""" INSERT INTO comment (url_id, user_id, comment) VALUES (?, ?, ?) """, url_id, auth.user.id, request.params["comment"].sanitizeHtml)
       if request.params.hasKey("reply-to"):
         let commentId = db.lastInsertRowId()
         var replyTo: Natural
@@ -378,8 +378,8 @@ Please make sure you don't give it to anyone else so no one can comment in your 
       let replyTo = unpack[Comment](row.get, offset, @["id", "timestamp", "name", "comment"])
       cache(auth.user.id, request.params["url"], key, replyTo.serializeReplyTo())
     else:
-      # default: just cache the value as string
-      cache(auth.user.id, request.params["url"], key, value)
+      # comment: cache as sanitized html
+      cache(auth.user.id, request.params["url"], key, value.sanitizeHtml)
 
     resp Http200
 

@@ -9,13 +9,13 @@
         <blockquote>
           <small>Reply to</small>
           <strong>${ ~comment.replyTo.name }</strong>
-          <kbd>${ ~comment.replyTo.comment.preview(125) }</kbd>
+          <kbd>${ comment.replyTo.comment.preview(125) }</kbd>
         </blockquote>
       </a>
 #   end if
     <strong>${ ~comment.name }</strong>
     <time>$comment.timestamp.ago</time>
-    <kbd>${ ~comment.comment }</kbd>
+    <kbd>${ comment.comment }</kbd>
 # if authenticated:
     <a href="/cache/reply-to?reply-to=$comment.id&url=$url" method="put" class="icon reply"></a>
 # end if
