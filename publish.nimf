@@ -14,7 +14,16 @@
     </blockquote>
   <input type="hidden" name="reply-to" value="$replyTo.get.id" />
 # end if
-  <textarea name="comment" placeholder="Write your comment">${ comment }</textarea>
+  <div class="buttons">
+    <button class="bold" title="bold"></button>
+    <button class="italic" title="italic"></button>
+    <button class="strikeThrough" title="strikethrough"></button>
+    <button class="createLink" title="create link"></button>
+    <button class="removeFormat" title="remove formatting"></button>
+    <button class="undo" title="undo"></button>
+    <button class="redo" title="redo"></button>
+  </div>
+  <kbd contenteditable placeholder="Write your comment">$comment</kbd>
   <input type="submit" value="Publish">
 </form>
 

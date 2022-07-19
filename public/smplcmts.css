@@ -18,6 +18,23 @@
   cursor: pointer;
 }
 
+#smplcmts kbd a:link,
+#smplcmts kbd a:visited,
+#smplcmts kbd a:hover,
+#smplcmts kbd a:active {
+  text-decoration: underline;
+  cursor: default;
+  color: #000;
+}
+
+#smplcmts kbd[contenteditable] a:link,
+#smplcmts kbd[contenteditable] a:visited,
+#smplcmts kbd[contenteditable] a:hover,
+#smplcmts kbd[contenteditable] a:active {
+  cursor: text;
+  color: blue;
+}
+
 #smplcmts .comment,
 #smplcmts form {
   display: flex;
@@ -25,15 +42,13 @@
   margin-bottom: 1em;
   padding: 1em 1em 1em 1em;
   justify-content: flex-start;
+  border-radius: 0.25em;
+  border: 1px #999 solid;
 }
 
 #smplcmts .comment {
   border-radius: 1em;
   border: 1px #eee solid;
-}
-#smplcmts form {
-  border-radius: 0.25em;
-  border: 1px #777 solid;
 }
 
 #smplcmts a.reply-to {
@@ -58,10 +73,6 @@
   padding: 0.5em;
 }
 
-#smplcmts form blockquote {
-  margin-top: 1em;
-}
-
 #smplcmts p {
   margin: 0;
 }
@@ -73,6 +84,7 @@
   background-color: #fff;
   font-weight: bold;
   border-radius: 0.25em;
+  font-size: 1.1em;
 }
 
 #smplcmts small {
@@ -98,26 +110,18 @@
 }
 
 #smplcmts strong {
-  margin: 0 auto 0 0em;
+  margin: 0 auto 0 0;
 }
 
-#smplcmts form > strong,
+#smplcmts form > strong {
+  margin: 0 auto 1em 0.25em;
+}
 #smplcmts blockquote > strong {
-  margin-left: 0.25em;
+  margin: 0 auto 0 0.25em;
 }
 
 #smplcmts form p {
   width: 100%;
-}
-
-#smplcmts form textarea {
-  border: 1px #eee solid;
-  width: 100%;
-  min-height: 8em;
-  margin: 1em 0 1.5em 0;
-  padding: 1em;
-  font-size: 1.1em;
-  font-family: inherit;
 }
 
 #smplcmts time {
@@ -193,6 +197,75 @@
   border: 1px #ddd solid;
   color: #333;
   border-radius: 0.25em;
+}
+
+#smplcmts form > .buttons > button {
+  width: 2.5em;
+  height: 2.5em;
+  border: 1px #999 solid;
+  background: white;
+  margin: 0 0 0 0;
+  border-width: 1px 0 0 1px;
+  font-weight: normal;
+  font-size: 1.125em;
+  cursor: pointer;
+}
+#smplcmts form > .buttons > button:last-of-type {
+  border-width: 1px 1px 0 1px
+}
+#smplcmts form > .buttons > button.selected {
+  background-color: #efefef;
+}
+#smplcmts form > .buttons {
+  width: 100%;
+  margin-bottom: -1px;
+  display: flex;
+}
+
+#smplcmts form > kbd[contenteditable] {
+  border: 1px #999 solid;
+  width: 100%;
+  min-height: 8em;
+  margin: 0 0 1.5em 0;
+  padding: 1em;
+  font-size: 1.1em;
+  font-family: inherit;
+  outline: none;
+}
+#smplcmts form > kbd[contenteditable]:empty:not(:focus):before{
+  content:attr(placeholder);
+  color:grey;
+  font-style:italic;
+}
+
+#smplcmts form > .buttons > button.bold:before {
+  content: "B";
+  font-weight: bold;
+}
+#smplcmts form > .buttons > button.italic:before {
+  content: "i";
+  font-weight: italic;
+}
+#smplcmts form > .buttons > button.strikeThrough:before {
+  content: "s";
+  text-decoration: line-through;
+}
+#smplcmts form > .buttons > button.createLink:before {
+  content: "a";
+  text-decoration: underline;
+  color: blue;
+}
+#smplcmts form > .buttons > button.removeFormat:before {
+  content: "T";
+  text-decoration: line-through;
+  font-weight: bold;
+  font-style: italic;
+}
+#smplcmts form > .buttons > button.undo:before {
+  content: "\00ab";
+}
+#smplcmts form > .buttons > button.redo:before {
+  content: "\00bb";
 }
 
 /* icons by fontaweseome- thanks!!! */

@@ -73,10 +73,9 @@ template shortBan(ip: string) =
 proc abortIfBanned(ip: string) =
   ## Enforce IP ban
   try:
-    {.cast(gcsafe)}:
-      let bannedUntil = limdb.`[]`(expiry.k2t, "ban $#" % ip).parseFloat.fromUnixFloat # TODO: why does keyvalue.`[]` not work, stay ambiguous?
-      let remaining = bannedUntil - getTime()
-      raise newException(AuthError, "Please try again in $# seconds" % $remaining.inSeconds )
+    let bannedUntil = limdb.`[]`(expiry.k2t, "ban $#" % ip).parseFloat.fromUnixFloat # TODO: why does keyvalue.`[]` not work, stay ambiguous?
+    let remaining = bannedUntil - getTime()
+    raise newException(AuthError, "Please try again in $# seconds" % $remaining.inSeconds )
   except KeyError:
     # no ban, continue
     discard

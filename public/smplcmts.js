@@ -30,14 +30,22 @@
   comments = container.getElementsByTagName('div')[0]
   form.outerHTML = await load('get', '/publish?url='+url)
   form = container.getElementsByTagName('form')[0]
-  container.addEventListener("submit", async function (e) {
+  function prev(e) {
     e.preventDefault()
     e.stopPropagation()
+  }
+  container.addEventListener("submit", async function (e) {
+    prev(e)
     let action = e.target.attributes.action.value
     let method = e.target.attributes.method.value
     try {
       var formdata = new FormData(e.target)
       formdata.set('url', url)
+      var comment
+      for (el of e.target.getElementsByTagName('kbd'))
+        if (el.hasAttribute('contenteditable'))
+          comment = el.innerHTML
+      formdata.set('comment', comment)
       message.innerText = await load(method, action, formdata)
       form.outerHTML = await load('get', '/publish?url='+url)
       form = container.getElementsByTagName('form')[0]
@@ -50,34 +58,7 @@
       message.innerText=e.message
     }
   })
-  container.addEventListener("click", async function (e) {
-    var target
-    if (e.target.tagName == 'A')
-      target = e.target
-    else if (e.target.parentNode.tagName == 'A')
-      target = e.target.parentNode
-    else
-      return true
-    if ( ! target.attributes.method ) {
-      if (target.classList.contains("share")) {
-        e.preventDefault()
-        e.stopPropagation()
-        navigator.clipboard.writeText(window.location.href.split('#')[0] + target.attributes.href.value)
-        target.classList.add("copied")
-        if (target.timeout) {
-          clearTimeout(target.timeout)
-          delete target.timeout
-        }
-        target.timeout = setTimeout(() => {
-          target.classList.remove("copied")
-          delete target.timeout
-        }, 3000)
-        return false
-      }
-      return true
-    }
-    e.preventDefault()
-    e.stopPropagation()
+  async function followLink(target) {
     let href = target.attributes.href.value
     let method = target.attributes.method.value
     message.innerText = await load(method, href)
@@ -88,12 +69,64 @@
     if (target.classList.contains("reply")) {
       window.location.hash = "comment-form"
     }
+  }
+  function copyLink(target) {
+    navigator.clipboard.writeText(window.location.href.split('#')[0] + target.attributes.href.value)
+    target.classList.add("copied")
+    if (target.timeout) {
+      clearTimeout(target.timeout)
+      delete target.timeout
+    }
+    target.timeout = setTimeout(function () {
+      target.classList.remove("copied")
+      delete target.timeout
+    }, 3000)
+  }
+  function buttonCommand(target) {
+    for (c of target.classList)
+      if (c != "selected")
+        return c
+  }
+  function format(target) {
+    let cmd = buttonCommand(target)
+    document.execCommand(cmd, false, cmd == 'createLink' ? prompt(`Please enter the link URL`) : null)
+  }
+  container.addEventListener("click", function (e) {
+    if (e.target.tagName == 'A')
+      if (e.target.hasAttribute("method"))
+        prev(e) || followLink(e.target)
+      else if (e.target.classList.contains("share"))
+        prev(e) || copyLink(e.target)
+      else
+        return
+    else if (e.target.parentNode.tagName == 'A')
+      prev(e) || followLink(e.target.parentNode)
+    else if (e.target.tagName == 'BUTTON')
+      prev(e) || format(e.target)
   })
+  function updateFormat() {
+    for (let button of form.getElementsByTagName('button'))
+      button.classList.toggle('selected', document.queryCommandState(buttonCommand(button)))
+  }
   container.addEventListener("input", async function (e) {
-    if (e.target.tagName != "TEXTAREA") return true
+    if (!e.target.hasAttribute("contenteditable")) return
     await load('put', '/cache/comment', {
-      comment: e.target.value,
+      comment: e.target.innerHTML,
       url: url
     })
+    updateFormat()
   })
+  container.addEventListener("keyup", updateFormat)
+  container.addEventListener("mouseup", updateFormat)
+  container.addEventListener("touchend", updateFormat)
+  container.addEventListener("keydown", function(e) {
+    if (!e.target.hasAttribute("contenteditable")) return
+    switch (e.which) {
+    case 13:
+      return document.execCommand('insertLineBreak')
+    }
+  })
+
 })()
+
+

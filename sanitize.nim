@@ -15,7 +15,7 @@ proc validate(node: XmlNode) =
   case node.kind:
     of xnElement:
       case node.tag
-      of "b", "i", "br", "s", "document":
+      of "b", "i", "br", "strike", "document":
         if node.attrsLen > 0:
           raise newException(ValueError, "No HTML attributes allowed for $#" % $node)
       of "a":
@@ -31,16 +31,19 @@ proc validate(node: XmlNode) =
       raise newException(ValueError, "Only text and HTML elements allowed but found $#" % $node)
 
 proc str(node: XmlNode): string =
-  if node.tag == "document":
+  if node.kind == xnElement and node.tag == "document":
     for n in node:  # append string value for children but not document element itself
       result.add(replace($n, " />", ">"))  # nasty hack to avoid XML closing tags, we're using HTML5
   else:
     result = replace($node, " />", ">")
 
+import logging
+
 proc sanitizeHtml*(html: string): string =
   ## Sanitize HTML. Parses and regenerates it so it's valid,
   ## and a ValueError is raised if it doesn't conform to our
   ## comment subset of HTML
+
   var errors: seq[string] = @[]
   let root = parseHtml(newStringStream(html), "unknown_html_doc", errors)
   if errors.len > 0:
