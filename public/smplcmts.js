@@ -127,6 +127,9 @@
     }
   })
 
+  if (window.location.hash == "#comment-form")
+    document.getElementById('comment-form').scrollIntoView({behavior: 'smooth'})
+
 })()
 
 
