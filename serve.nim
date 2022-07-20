@@ -103,21 +103,38 @@ proc auth(request: Request): Auth =
     raise
   t.reset()
 
+template forwardedHost(request: Request): string =
+  try:
+    $request.headers["x-forwarded-host"]
+  except KeyError:
+    request.host
+
+template forwardedPort(request: Request): int =
+  try:
+    parseInt request.headers["x-forwarded-port"]
+  except KeyError:
+    request.port
+
 proc base(request: Request): string =
+  let port = request.forwardedPort
+  let host = request.forwardedHost
   if request.secure:
     result.add("https://")
-    result.add(request.host)
-    if request.port != 443:
+    result.add(host)
+    if port != 443:
       result.add(":")
-      result.add($request.port)
+      result.add($port)
   else:
     result.add("http://")
-    result.add(request.host)
-    if request.port != 80:
+    result.add(host)
+    if port != 80:
       result.add(":")
-      result.add($request.port)
+      result.add($port)
 
 router comments:
+
+  get "/":
+    resp Http200, "ok"
 
   get "/comments":
     let authUserId = try:
