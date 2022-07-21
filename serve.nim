@@ -290,8 +290,8 @@ Please make sure you don't give it to anyone else so no one can comment in your 
     t.commit()
     db.exec("COMMIT")
     expiry[sessionKey] = initDuration(days=7, hours=1) # let cookie expire for security, cleanup token a bit later
-    setCookie("CommentSessionToken", sessionToken, expires=daysForward(7), sameSite=None, httpOnly=true,
-              path="/",)
+    setCookie("CommentSessionToken", sessionToken, expires=daysForward(7), sameSite=Strict, httpOnly=true,
+              path="/",secure=true)
     setHeader("Access-Control-Allow-Headers", "Set-Cookie")
     redirect redirectUrl & "#comment-form"
 
