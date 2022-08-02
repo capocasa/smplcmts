@@ -175,7 +175,7 @@ LEFT JOIN
   ON reply_to.id = comment.reply_to
 LEFT JOIN
   user AS replyee
-  ON user.id=reply_to.user_id
+  ON replyee.id=reply_to.user_id
 WHERE
   url=?
 GROUP BY
