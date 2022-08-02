@@ -23,7 +23,7 @@
     <button class="undo" title="undo"></button>
     <button class="redo" title="redo"></button>
   </div>
-  <kbd contenteditable placeholder="Write your comment">$comment</kbd>
+  <div contenteditable placeholder="Write your comment">$comment</div>
   <input type="submit" value="Publish">
 </form>
 

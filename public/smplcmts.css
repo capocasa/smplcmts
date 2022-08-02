@@ -31,10 +31,10 @@ html {
   color: #000;
 }
 
-#smplcmts kbd[contenteditable] a:link,
-#smplcmts kbd[contenteditable] a:visited,
-#smplcmts kbd[contenteditable] a:hover,
-#smplcmts kbd[contenteditable] a:active {
+#smplcmts div[contenteditable] a:link,
+#smplcmts div[contenteditable] a:visited,
+#smplcmts div[contenteditable] a:hover,
+#smplcmts div[contenteditable] a:active {
   cursor: text;
   color: blue;
 }
@@ -226,7 +226,7 @@ html {
   display: flex;
 }
 
-#smplcmts form > kbd[contenteditable] {
+#smplcmts form > div[contenteditable] {
   border: 1px #999 solid;
   width: 100%;
   min-height: 8em;
@@ -238,7 +238,7 @@ html {
   max-height: calc(100vh - 11em);
   overflow: auto;
 }
-#smplcmts form > kbd[contenteditable]:empty:not(:focus):before{
+#smplcmts form > div[contenteditable]:empty:not(:focus):before{
   content:attr(placeholder);
   color:grey;
   font-style:italic;

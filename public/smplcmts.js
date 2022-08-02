@@ -42,7 +42,7 @@
       var formdata = new FormData(e.target)
       formdata.set('url', url)
       var comment
-      for (el of e.target.getElementsByTagName('kbd'))
+      for (el of e.target.getElementsByTagName('div'))
         if (el.hasAttribute('contenteditable'))
           comment = el.innerHTML
       formdata.set('comment', comment)
