@@ -123,7 +123,8 @@
     if (!e.target.hasAttribute("contenteditable")) return
     switch (e.which) {
     case 13:
-      return document.execCommand('insertLineBreak')
+      e.preventDefault()
+      document.execCommand('insertLineBreak')
     }
   })
 
