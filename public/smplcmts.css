@@ -236,7 +236,7 @@ html {
   font-family: inherit;
   outline: none;
   max-height: calc(100vh - 11em);
-  overflow: scroll;
+  overflow: auto;
 }
 #smplcmts form > kbd[contenteditable]:empty:not(:focus):before{
   content:attr(placeholder);
