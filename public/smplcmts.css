@@ -230,11 +230,13 @@ html {
   border: 1px #999 solid;
   width: 100%;
   min-height: 8em;
-  margin: 0 0 1.5em 0;
+  margin: 0 0 1em 0;
   padding: 1em;
   font-size: 1.1em;
   font-family: inherit;
   outline: none;
+  max-height: calc(100vh - 11em);
+  overflow: scroll;
 }
 #smplcmts form > kbd[contenteditable]:empty:not(:focus):before{
   content:attr(placeholder);
