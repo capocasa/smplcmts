@@ -332,7 +332,7 @@ Please make sure you don't give it to anyone else so no one can comment in your 
       raise
     db.exec("COMMIT")
     
-    for key in ["reply", "comment"]:
+    for key in ["reply-to", "comment"]:
       cache(auth.user.id, request.params["url"], key, "")
 
     resp Http200, "Thank you, you published a comment!"
