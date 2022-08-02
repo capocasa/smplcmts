@@ -115,7 +115,10 @@ template unpack*[T: object](row: ResultRow, offset = 0): T =
 proc unpack*[T: object](row: ResultRow, offset: var int, limit_to: static[seq[string]]): T =
   for name, value in fieldPairs result:
     when limit_to.len == 0 or name in limit_to:
-      value = row[offset].fromDbValue(type(value))
+      try:
+        value = row[offset].fromDbValue(type(value))
+      except Exception as e:
+        raise newException(ValueError, "Unpack error on $# for $#: $#" % [name, $value, e.msg] )
       offset.inc
 
 #[
