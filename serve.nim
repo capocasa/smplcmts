@@ -266,6 +266,7 @@ Please make sure you don't give it to anyone else so no one can comment in your 
         t[authKey]
       except:
         t.reset()
+        db.exec("ROLLBACK")
         request.ip.shortBan
         resp Http401, "No link matching this one was sent recently, please check that it is the right one"
       t.del authKey, authValue
