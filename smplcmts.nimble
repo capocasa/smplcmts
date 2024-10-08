@@ -14,6 +14,6 @@ requires "cligen"
 requires "jester#master"
 requires "tiny_sqlite"
 requires "ago"
-requires "limdb"
+requires "limdb#0.1.0"
 requires "at"
-
+requires "smtp"

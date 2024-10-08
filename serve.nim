@@ -1,6 +1,7 @@
-import std/[strutils, re, times, tables, options, parseutils, strscans, smtp, uri, logging, sequtils]
-import jester except error, routeException
-import jester/private/utils
+import std/[strutils, re, times, tables, options, parseutils, strscans, uri, logging, sequtils]
+import pkg/smtp
+import pkg/jester except error, routeException
+import pkg/jester/private/utils
 import types, database, keyvalue, secret, sanitize, serialize
 import configuration
 
@@ -49,6 +50,7 @@ template defaultHeaders() =
   setHeader("Access-Control-Allow-Origin", request.origin)
   setHeader("Access-Control-Allow-Credentials", "true")
   setHeader("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
+  setHeader("Cross-Origin-Resource-Policy", "cross-origin")
 
 template resp*(code: HttpCode) =
   defaultHeaders()
