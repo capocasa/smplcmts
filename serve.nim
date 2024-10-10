@@ -1,5 +1,5 @@
 import std/[strutils, re, times, tables, options, parseutils, strscans, uri, logging, sequtils]
-import pkg/smtp
+import pkg/[smtp]
 import pkg/jester except error, routeException
 import pkg/jester/private/utils
 import types, database, keyvalue, secret, sanitize, serialize
@@ -75,7 +75,7 @@ template shortBan(ip: string) =
 proc abortIfBanned(ip: string) =
   ## Enforce IP ban
   try:
-    let bannedUntil = limdb.`[]`(expiry.k2t, "ban $#" % ip).parseFloat.fromUnixFloat # TODO: why does keyvalue.`[]` not work, stay ambiguous?
+    let bannedUntil = limdb.`[]`(expiry.k2t, "ban $#" % ip)
     let remaining = bannedUntil - getTime()
     raise newException(AuthError, "Please try again in $# seconds" % $remaining.inSeconds )
   except KeyError:
@@ -91,19 +91,14 @@ proc auth(request: Request): Auth =
   else:
     raise newException(AuthError, "Please request a comment link by email to start commenting")
 
-  let t = kv.initTransaction()
   try:
-    let value = t["session $#" % saltedHash(result.sessionToken)]
-    discard parseSaturatedNatural(value, result.user.id)
-    result.user.username = t["userId $# username" % $result.user.id]
+    kv.withTransaction t:
+      let value = t["session $#" % saltedHash(result.sessionToken)]
+      discard parseSaturatedNatural(value, result.user.id)
+      result.user.username = t["userId $# username" % $result.user.id]
   except KeyError:
-    t.reset()
     request.ip.shortBan
     raise newException(AuthError, "There is something wrong with your secret comment link, please request a new one by email")
-  except:
-    t.reset()
-    raise
-  t.reset()
 
 template forwardedHost(request: Request): string =
   try:
@@ -249,48 +244,43 @@ Please make sure you don't give it to anyone else so no one can comment in your 
 
   delete "/signin":
     let auth = request.auth
-    let t = kv.initTransaction()
-    let key = "session $#" % saltedHash(auth.sessionToken)
-    let value = t[key]
-    t.del key
-    t.commit()
+    kv.withTransaction t:
+      let key = "session $#" % saltedHash(auth.sessionToken)
+      let value = t[key]
+      t.del key
     resp Http200, "You are now no longer commenting as $#" % auth.user.username
 
   get "/confirm/@authToken":
     request.ip.abortIfBanned
     let authKey = "signin $#" % saltedHash(@"authToken")
-    let t = kv.initTransaction()
     var sessionToken, sessionKey: string
     var emailHash, redirectUrl: string
     try:
-      db.exec("BEGIN")
-      let authValue = try:
-        t[authKey]
-      except:
-        t.reset()
-        db.exec("ROLLBACK")
-        request.ip.shortBan
-        resp Http401, "No link matching this one was sent recently, please check that it is the right one"
-      t.del authKey, authValue
-      assert scanf(authValue, "$+ $+$.", emailHash, redirectUrl), "internal comment email error"
-      let row = db.one(""" SELECT id, username FROM user WHERE email_hash = ? """, emailHash)
-      let user = if row.isSome:
-        unpack[User](row.get)
-      else:
-        db.exec(""" INSERT INTO user (email_hash) VALUES (?) """, emailHash)
-        var user:User
-        user.id = db.lastInsertRowId()
-        user
+      kv.withTransaction t:
+        db.exec("BEGIN")
+        let authValue = t[authKey]
+        t.del authKey, authValue
+        assert scanf(authValue, "$+ $+$.", emailHash, redirectUrl), "internal comment email error"
+        let row = db.one(""" SELECT id, username FROM user WHERE email_hash = ? """, emailHash)
+        let user = if row.isSome:
+          unpack[User](row.get)
+        else:
+          db.exec(""" INSERT INTO user (email_hash) VALUES (?) """, emailHash)
+          var user:User
+          user.id = db.lastInsertRowId()
+          user
 
-      sessionToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
-      sessionKey = "session $#" % saltedHash(sessionToken)
-      t[sessionKey] = $user.id
-      t["userId $# username" % $user.id] = user.username
-    except:
-      t.reset()
+        sessionToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
+        sessionKey = "session $#" % saltedHash(sessionToken)
+        t[sessionKey] = $user.id
+        t["userId $# username" % $user.id] = user.username
+    except KeyError:
+      db.exec("ROLLBACK")
+      request.ip.shortBan
+      resp Http401, "No link matching this one was sent recently, please check that it is the right one"
+    except CatchableError:
       db.exec("ROLLBACK")
       raise
-    t.commit()
     db.exec("COMMIT")
     expiry[sessionKey] = initDuration(days=7, hours=1) # let cookie expire for security, cleanup token a bit later
     setCookie("CommentSessionToken", sessionToken, expires=daysForward(7), sameSite=Strict, httpOnly=true,
