@@ -75,7 +75,7 @@ template shortBan(ip: string) =
 proc abortIfBanned(ip: string) =
   ## Enforce IP ban
   try:
-    let bannedUntil = limdb.`[]`(expiry.k2t, "ban $#" % ip)
+    let bannedUntil = expiry.k2t["ban $#" % ip]
     let remaining = bannedUntil - getTime()
     raise newException(AuthError, "Please try again in $# seconds" % $remaining.inSeconds )
   except KeyError:
@@ -203,11 +203,11 @@ ORDER BY
     if auth.user.username == "":
       resp Http200, formatName(), "text/html; charset=utf-8"
     let cachedComment = try:
-      limdb.`[]`(kv,"cache $# $# comment" % [$auth.user.id, request.params["url"]])
+      kv["cache $# $# comment" % [$auth.user.id, request.params["url"]]]
     except KeyError:
       ""
     let cachedReplyTo = try:
-      limdb.`[]`(kv, "cache $# $# reply-to" % [$auth.user.id, request.params["url"]]).unserializeReplyTo().some
+      kv["cache $# $# reply-to" % [$auth.user.id, request.params["url"]]].unserializeReplyTo().some
     except KeyError:
       none(Comment)
 
@@ -355,15 +355,15 @@ Please make sure you don't give it to anyone else so no one can comment in your 
     let cacheKey = "cache $# $# $#" % [$user_id, url, key]
     if value == "":
       try:
-        limdb.del(kv, cacheKey)
+        kv.del cacheKey
       except KeyError:
         discard
     else:
       kv[cacheKey] = value
     if expiry.k2t.hasKey(cacheKey):
       # workaround for yet unexplored mixin conflict
-      limdb.del expiry.t2k, limdb.`[]`(expiry.k2t, cacheKey)
-      limdb.del expiry.k2t, cacheKey
+      expiry.t2k.del expiry.k2t[cacheKey]
+      expiry.k2t.del cacheKey
     if value != "":
       # if not deleting schedule long expiry
       expiry[cacheKey] = initDuration(days=30)
