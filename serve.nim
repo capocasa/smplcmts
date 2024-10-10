@@ -418,6 +418,7 @@ proc errorHandler(request: Request, error: RouteError): Future[ResponseData] {.a
 
 proc serve*(settings: Settings) =
   var jester = initJester(comments, settings=settings)
-  jester.register(errorHandler)
+  if defined(release):
+    jester.register(errorHandler)
   jester.serve()
 
