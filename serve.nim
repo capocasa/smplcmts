@@ -401,6 +401,12 @@ Please make sure you don't give it to anyone else so no one can comment in your 
       cache(auth.user.id, request.params["url"], key, value.sanitizeHtml)
 
     resp Http200
+  
+  # serve static files manually to set cors headers
+  get "/smplcmts.css":
+    resp Http200, readFile("smplcmts.css"), "text/css;charset=utf-8"
+  get "/smplcmts.js":
+    resp Http200, readFile("smplcmts.js"), "application/javascript;charset=utf-8"
 
 proc errorHandler(request: Request, error: RouteError): Future[ResponseData] {.async.} =
   block route:
