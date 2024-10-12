@@ -4,6 +4,7 @@ type
   User* = object
     id*: Natural
     username*: string
+    emailHash*: string
 
   Comment* = object
     id*: Natural

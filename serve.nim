@@ -1,8 +1,7 @@
 import std/[strutils, re, times, tables, options, parseutils, strscans, uri, logging, sequtils]
-import pkg/[smtp]
 import pkg/jester except error, routeException
 import pkg/jester/private/utils
-import types, database, keyvalue, secret, sanitize, serialize
+import types, database, keyvalue, secret, sanitize, serialize, mail
 import configuration
 
 include "comments.nimf"
@@ -221,24 +220,23 @@ ORDER BY
     let authToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
     let email = request.params["email"]
     let url = request.params["url"]
+    let notify = "notify" in request.params
     let signinKey = "signin $#" % saltedHash(authToken)
-    kv[signinKey] = "$# $#" % [saltedHash(email), url]
+    kv[signinKey] = "$# $# $#" % [saltedHash(email), url, if notify: email else: ""]
     expiry[signinKey] = initDuration(hours=1)
-    let smtp = newAsyncSmtp()
-    await smtp.connect(config.mailHost, Port config.mailPort)
-    let link = "$#/confirm/$#" % [request.base, authToken]
-    try:
-      await smtp.sendMail(config.mailFrom, @[email], $createMessage("Secret Commenting Link", """
+    withAsyncSmtp:
+      try:
+        await smtp.sendMail(config.mailFrom, @[email], $createMessage("Secret Commenting Link", """
 
 Thank you! Please follow this link to start commenting:
 
-$#
+$#/confirm/$#
 
 Please make sure you don't give it to anyone else so no one can comment in your name
 
-""" % link, @[email]))
-    except ReplyError as e:
-      resp Http409, "The email could not be sent, please take a look at the address."
+""" % [request.base, authToken], @[email]))
+      except ReplyError as e:
+        resp Http409, "The email could not be sent, please take a look at the address."
 
     resp Http200, """Thank you! Please check your email, you're looking for one called "Secret Commenting Link"."""
 
@@ -254,13 +252,13 @@ Please make sure you don't give it to anyone else so no one can comment in your 
     request.ip.abortIfBanned
     let authKey = "signin $#" % saltedHash(@"authToken")
     var sessionToken, sessionKey: string
-    var emailHash, redirectUrl: string
+    var emailHash, redirectUrl, email: string
     try:
       kv.withTransaction t:
         db.exec("BEGIN")
         let authValue = t[authKey]
         t.del authKey, authValue
-        assert scanf(authValue, "$+ $+$.", emailHash, redirectUrl), "internal comment email error"
+        assert scanf(authValue, "$+ $+ $*$.", emailHash, redirectUrl, email), "internal comment email error"
         let row = db.one(""" SELECT id, username FROM user WHERE email_hash = ? """, emailHash)
         let user = if row.isSome:
           unpack[User](row.get)
@@ -269,11 +267,21 @@ Please make sure you don't give it to anyone else so no one can comment in your 
           var user:User
           user.id = db.lastInsertRowId()
           user
+        user.emailHash = emailHash
 
         sessionToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
         sessionKey = "session $#" % saltedHash(sessionToken)
         t[sessionKey] = $user.id
         t["userId $# username" % $user.id] = user.username
+        t["userId $# email_hash " % $user.id] = emailHash 
+        let notifyKey = "userId $# notify" % $user.id
+        if email == "":
+          try:
+            t.del notifyKey
+          except KeyError:
+            discard
+        else:
+          t[notifyKey] = email
     except KeyError:
       db.exec("ROLLBACK")
       request.ip.shortBan
@@ -305,27 +313,53 @@ Please make sure you don't give it to anyone else so no one can comment in your 
     for k in request.params.keys:
       if k notin ["reply-to", "comment", "url"]:
         raise newException(ValueError, "Invalid key $#" % k)
+    let url = request.params["url"]
+    var urlId, commentId: int
+    let comment = request.params["comment"].sanitizeHtml
     try:
       db.exec("BEGIN")
-      let value = db.value(""" SELECT id FROM url WHERE url = ? """, request.params["url"])
-      let url_id = if value.isNone:
-        db.exec(""" INSERT INTO url (url) VALUES (?) """, request.params["url"])
+      let value = db.value(""" SELECT id FROM url WHERE url = ? """, url)
+      urlId = if value.isNone:
+        db.exec(""" INSERT INTO url (url) VALUES (?) """, url)
         db.lastInsertRowId()
       else:
         value.get().fromDbValue(int)
-      db.exec(""" INSERT INTO comment (url_id, user_id, comment) VALUES (?, ?, ?) """, url_id, auth.user.id, request.params["comment"].sanitizeHtml)
+      db.exec(""" INSERT INTO comment (url_id, user_id, comment) VALUES (?, ?, ?) """, urlId, auth.user.id, comment)
+      commentId = db.lastInsertRowId()
       if request.params.hasKey("reply-to"):
-        let commentId = db.lastInsertRowId()
         var replyTo: Natural
         discard parseSaturatedNatural(request.params["reply-to"], replyTo)
         db.exec(""" UPDATE comment SET reply_to = ? WHERE id = ? """, replyTo, commentId)
+
     except:
       db.exec("ROLLBACK")
       raise
     db.exec("COMMIT")
-    
+
     for key in ["reply-to", "comment"]:
-      cache(auth.user.id, request.params["url"], key, "")
+      cache(auth.user.id, url, key, "")
+
+    withAsyncSmtp:
+      for row in db.iterate(""" SELECT DISTINCT user_id FROM comment WHERE url_id=? AND user_id !=? """, urlId, auth.user.id):
+        let userId = row[0].fromDbValue(int)
+        let email = kv["userId $# notify" % $userId]
+
+        # unlike the auth, these mails are informative, not essential, so don't wait for them to complete before returning
+        # so use asynccheck instead of await
+        await smtp.sendMail(config.mailFrom, @[email], $createMessage("New Comment from $#" % auth.user.username, """
+$# made a comment:
+
+--
+$#
+--
+
+See all comments and reply:
+$##comment-$#
+
+Unsubscribe:
+$#/unsubscribe/$#
+
+""" % [auth.user.username, comment, url, "form", request.base, auth.user.emailHash]))  # "form" should be $commentId but there is a frontend scroll issue
 
     resp Http200, "Thank you, you published a comment!"
 

@@ -5,6 +5,10 @@
   <p>Would you like to make a comment?</p>
   <input type="text" name="email" placeholder="Email" />
   <input type="submit" value="Receive a link">
-  <small>Your email address will not be stored</small>
+  <!-- <small>Your email address will not be stored</small> -->
+  <label>
+    <input type="checkbox" name="notify" checked>
+    Send me an email when someone replies to me
+  </label>
 </form>
 
