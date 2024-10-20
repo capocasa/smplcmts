@@ -29,7 +29,7 @@ proc base(uri: Uri): string =
   if uri.hostname != "":
     result.add("//")
     result.add(uri.hostname)
-  if uri.port != "":
+  if uri.port != "" and uri.port != "80" and uri.port != "443":
     result.add(":")
     result.add(uri.port)
 
@@ -95,6 +95,7 @@ proc auth(request: Request): Auth =
       let value = t["session $#" % saltedHash(result.sessionToken)]
       discard parseSaturatedNatural(value, result.user.id)
       result.user.username = t["userId $# username" % $result.user.id]
+      result.user.emailHash = t["userId $# email_hash" % $result.user.id]
   except KeyError:
     request.ip.shortBan
     raise newException(AuthError, "There is something wrong with your secret comment link, please request a new one by email")
@@ -135,7 +136,8 @@ router comments:
   get "/comments":
     let authUserId = try:
       request.auth.user.id.int
-    except AuthError:
+    except AuthError as e:
+      echo e.msg
       -1
     iterator comments(): Comment =
       # note the delimiter ascii-31 is used which is not allowed
@@ -259,21 +261,21 @@ Please make sure you don't give it to anyone else so no one can comment in your 
         let authValue = t[authKey]
         t.del authKey, authValue
         assert scanf(authValue, "$+ $+ $*$.", emailHash, redirectUrl, email), "internal comment email error"
-        let row = db.one(""" SELECT id, username FROM user WHERE email_hash = ? """, emailHash)
+        let row = db.one(""" SELECT id, username, email_hash FROM user WHERE email_hash = ? """, emailHash)
         let user = if row.isSome:
           unpack[User](row.get)
         else:
           db.exec(""" INSERT INTO user (email_hash) VALUES (?) """, emailHash)
           var user:User
           user.id = db.lastInsertRowId()
+          user.emailHash = emailHash
           user
-        user.emailHash = emailHash
 
         sessionToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
         sessionKey = "session $#" % saltedHash(sessionToken)
         t[sessionKey] = $user.id
         t["userId $# username" % $user.id] = user.username
-        t["userId $# email_hash " % $user.id] = emailHash 
+        t["userId $# email_hash" % $user.id] = emailHash
         let notifyKey = "userId $# notify" % $user.id
         if email == "":
           try:
@@ -340,8 +342,8 @@ Please make sure you don't give it to anyone else so no one can comment in your 
       cache(auth.user.id, url, key, "")
 
     withAsyncSmtp:
-      for row in db.iterate(""" SELECT DISTINCT user_id FROM comment WHERE url_id=? AND user_id !=? """, urlId, auth.user.id):
-        let userId = row[0].fromDbValue(int)
+      for row in db.iterate(""" SELECT DISTINCT user_id, email_hash FROM comment LEFT JOIN user ON user.id=user_id WHERE url_id=? AND user_id !=? """, urlId, auth.user.id):
+        let (userId, emailHash) = row.unpack((int, string))
         let email = kv["userId $# notify" % $userId]
 
         # unlike the auth, these mails are informative, not essential, so don't wait for them to complete before returning
@@ -425,7 +427,19 @@ $#/unsubscribe/$#
       cache(auth.user.id, request.params["url"], key, value.sanitizeHtml)
 
     resp Http200
-  
+
+  get "/unsubscribe/@email_hash":
+    let value = db.value(""" SELECT id FROM user WHERE email_hash = ? """, @"email_hash")
+    let userId = if value.isSome:
+      value.get.fromDbValue(int)
+    else:
+      -1
+    try:
+      kv.del "userId $# notify" % $userId
+    except KeyError:
+      resp Http200, "You already do not receive an email when someone comments."
+    resp Http200, "You will no longer receive an email when someone comments."
+
   # serve static files manually to set cors headers
   get "/smplcmts.css":
     resp Http200, readFile("smplcmts.css"), "text/css;charset=utf-8"
