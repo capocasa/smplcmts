@@ -113,6 +113,7 @@ template forwardedPort(request: Request): int =
     request.port
 
 proc base(request: Request): string =
+  echo "REQUEST ", $request.headers
   let port = request.forwardedPort
   let host = request.forwardedHost
   if request.secure:
@@ -293,6 +294,13 @@ Please make sure you don't give it to anyone else so no one can comment in your 
       raise
     db.exec("COMMIT")
     expiry[sessionKey] = initDuration(days=7, hours=1) # let cookie expire for security, cleanup token a bit later
+    
+    # TODO: try domain from redirectUrl
+    # let uri= parseUri(redirectUrl)
+    # let origin = uri.base
+    # if origin notin config.allowedOrigins:
+    #  resp Http409, "Origin %s not allowed" % origin
+    # let domain = domain=uri.hostname
     setCookie("CommentSessionToken", sessionToken, expires=daysForward(7), sameSite=None, httpOnly=true,
               path="/",secure=true)
     setHeader("Access-Control-Allow-Headers", "Set-Cookie")

@@ -2,9 +2,11 @@
 # import format
 # proc formatPublish*(username, comment, url: string, replyTo: Option[Comment]): string =
 <form id="comment-form" action="/publish" method="post" class="publish">
+# if username != "":
   <small>Commenting as</small>
   <strong>$username</strong>
   <a href="/signin" method="delete" class="icon logout"></a>
+# end if
 # if replyTo.issome:
     <blockquote>
       <small>Replying to</small>
