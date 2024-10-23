@@ -352,7 +352,10 @@ Please make sure you don't give it to anyone else so no one can comment in your 
     withAsyncSmtp:
       for row in db.iterate(""" SELECT DISTINCT user_id, email_hash FROM comment LEFT JOIN user ON user.id=user_id WHERE url_id=? AND user_id !=? """, urlId, auth.user.id):
         let (userId, emailHash) = row.unpack((int, string))
-        let email = kv["userId $# notify" % $userId]
+        let email = try:
+          kv["userId $# notify" % $userId]
+        except KeyError:
+          continue
 
         # unlike the auth, these mails are informative, not essential, so don't wait for them to complete before returning
         # so use asynccheck instead of await
