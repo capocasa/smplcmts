@@ -45,24 +45,14 @@ proc origin(request: Request): string =
 template setHeader(key, value: string) =
   setHeader(result[2], key, value)
 
-template defaultHeaders() =
+template corsHeaders() =
   setHeader("Access-Control-Allow-Origin", request.origin)
   setHeader("Access-Control-Allow-Credentials", "true")
   setHeader("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
   setHeader("Cross-Origin-Resource-Policy", "cross-origin")
 
-template resp*(code: HttpCode) =
-  defaultHeaders()
-  jester.resp code
-
-template resp*(code: HttpCode, content: string,
-               contentType = "text/plain;charset=utf-8") =
-  defaultHeaders()
-  jester.resp code, content, contentType
-
-template redirect(url: string, halt = true) =
-  defaultHeaders()
-  jester.redirect(url, halt)
+const textType = "text/plain;charset=utf-8"
+const htmlType = "text/html;charset=utf-8"
 
 template shortBan(ip: string) =
   ## Simple short IP ban for any auth failure to prevent brute-forcing session or auth tokens.
@@ -132,9 +122,11 @@ proc base(request: Request): string =
 router comments:
 
   get "/":
-    resp Http200, "ok"
+    corsHeaders()
+    resp Http200, "ok", textType
 
   get "/comments":
+    corsHeaders()
     let authUserId = try:
       request.auth.user.id.int
     except AuthError as e:
@@ -195,15 +187,16 @@ ORDER BY
       true
     except AuthError:
       false
-    resp Http200, formatComments(comments, request.params["url"], authenticated), "text/html;charset=utf-8"
+    resp Http200, formatComments(comments, request.params["url"], authenticated), htmlType
 
   get "/publish":
+    corsHeaders()
     let auth = try:
       request.auth
     except AuthError as e:
-      resp Http200,  formatSignin(), "text/html;charset=utf-8"
+      resp Http200,  formatSignin(), htmlType
     if auth.user.username == "":
-      resp Http200, formatName(), "text/html; charset=utf-8"
+      resp Http200, formatName(), htmlType
     let cachedComment = try:
       kv["cache $# $# comment" % [$auth.user.id, request.params["url"]]]
     except KeyError:
@@ -213,13 +206,15 @@ ORDER BY
     except KeyError:
       none(Comment)
 
-    resp Http200, formatPublish(auth.user.username, cachedComment, request.params["url"], cachedReplyTo), "text/html;charset=utf-8"
+    resp Http200, formatPublish(auth.user.username, cachedComment, request.params["url"], cachedReplyTo), htmlType
 
   get "/name":
-    resp Http200, formatName(), "text/html;charset=utf-8"
+    corsHeaders()
+    resp Http200, formatName(), htmlType
 
   post "/signin":
     request.ip.abortIfBanned
+    corsHeaders()
     let authToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
     let email = request.params["email"]
     let url = request.params["url"]
@@ -239,9 +234,9 @@ Please make sure you don't give it to anyone else so no one can comment in your 
 
 """ % [request.base, authToken], @[email]))
       except ReplyError as e:
-        resp Http409, "The email could not be sent, please take a look at the address."
+        resp Http409, "The email could not be sent, please take a look at the address.", textType
 
-    resp Http200, """Thank you! Please check your email, you're looking for one called "Secret Commenting Link"."""
+    resp Http200, """Thank you! Please check your email, you're looking for one called "Secret Commenting Link".""", textType
 
   delete "/signin":
     let auth = request.auth
@@ -249,10 +244,11 @@ Please make sure you don't give it to anyone else so no one can comment in your 
       let key = "session $#" % saltedHash(auth.sessionToken)
       let value = t[key]
       t.del key
-    resp Http200, "You are now no longer commenting as $#" % auth.user.username
+    resp Http200, "You are now no longer commenting as $#" % auth.user.username, textType
 
   get "/confirm/@authToken":
     request.ip.abortIfBanned
+    # note no corsHeaders() required
     let authKey = "signin $#" % saltedHash(@"authToken")
     var sessionToken, sessionKey: string
     var emailHash, redirectUrl, email: string
@@ -285,10 +281,12 @@ Please make sure you don't give it to anyone else so no one can comment in your 
             discard
         else:
           t[notifyKey] = email
+        echo "T ",t["userId $# notify" % $user.id]
+
     except KeyError:
       db.exec("ROLLBACK")
       request.ip.shortBan
-      resp Http401, "No link matching this one was sent recently, please check that it is the right one"
+      resp Http401, "No link matching this one was sent recently, please check that it is the right one", textType
     except CatchableError:
       db.exec("ROLLBACK")
       raise
@@ -307,18 +305,20 @@ Please make sure you don't give it to anyone else so no one can comment in your 
     redirect redirectUrl & "#comment-form"
 
   post "/name":
+    corsHeaders()
     let auth = request.auth
     if auth.user.username != "":
-      resp Http409, "You already chose your name"
+      resp Http409, "You already chose your name", textType
     let username = request.params["username"].sanitize
     try:
       db.exec(""" UPDATE user SET username = ? WHERE id = ? """, username, auth.user.id)
     except SqliteError:
-      resp Http409, "Someone already chose that name!"
+      resp Http409, "Someone already chose that name!", textType
     kv["userId $# username" % $auth.user.id] = username
-    resp Http200, "Thank you! You are now known as: $#" % username
+    resp Http200, "Thank you! You are now known as: $#" % username, textType
 
   post "/publish":
+    corsHeaders()
     let auth = request.auth
     for k in request.params.keys:
       if k notin ["reply-to", "comment", "url"]:
@@ -371,13 +371,14 @@ $#/unsubscribe/$#
 
 """ % [auth.user.username, comment, url, "form", request.base, auth.user.emailHash]))  # "form" should be $commentId but there is a frontend scroll issue
 
-    resp Http200, "Thank you, you published a comment!"
+    resp Http200, "Thank you, you published a comment!", textType
 
   options re".*":
-    defaultHeaders()
+    corsHeaders()
     resp Http200
 
   post "/love/@id":
+    corsHeaders()
     let auth = request.auth
     try:
       db.exec("BEGIN")
@@ -413,20 +414,21 @@ $#/unsubscribe/$#
       expiry[cacheKey] = initDuration(days=30)
 
   put "/cache/@key":
+    corsHeaders()
     let auth = request.auth
     let key = @"key"
     case key:
     of "comment", "reply-to":
       discard
     else:
-      resp Http404, "Cannot cache '$#', must be 'comment' or 'reply-to'" % @"key"
+      resp Http404, "Cannot cache '$#', must be 'comment' or 'reply-to'" % @"key", textType
     let value = request.params[key]
 
     if key == "reply-to" and value.len > 0:
       # reply-to: cache entire reply
       let row = db.one(""" SELECT comment.id, timestamp, username, comment FROM comment LEFT JOIN user ON user_id=user.id WHERE comment.id=? """, value)
       if row.isNone:
-        resp Http409, "reply-to with id $# not found" % value
+        resp Http409, "reply-to with id $# not found" % value, textType
       var offset = 0
       let replyTo = unpack[Comment](row.get, offset, @["id", "timestamp", "name", "comment"])
       cache(auth.user.id, request.params["url"], key, replyTo.serializeReplyTo())
@@ -434,9 +436,10 @@ $#/unsubscribe/$#
       # comment: cache as sanitized html
       cache(auth.user.id, request.params["url"], key, value.sanitizeHtml)
 
-    resp Http200
+    resp Http200, "", textType
 
   get "/unsubscribe/@email_hash":
+    corsHeaders()
     let value = db.value(""" SELECT id FROM user WHERE email_hash = ? """, @"email_hash")
     let userId = if value.isSome:
       value.get.fromDbValue(int)
@@ -445,13 +448,15 @@ $#/unsubscribe/$#
     try:
       kv.del "userId $# notify" % $userId
     except KeyError:
-      resp Http200, "You already do not receive an email when someone comments."
-    resp Http200, "You will no longer receive an email when someone comments."
+      resp Http409, "You already do not receive an email when someone comments.", textType
+    resp Http200, "You will no longer receive an email when someone comments.", textType
 
   # serve static files manually to set cors headers
   get "/smplcmts.css":
+    corsHeaders()
     resp Http200, readFile("smplcmts.css"), "text/css;charset=utf-8"
   get "/smplcmts.js":
+    corsHeaders()
     resp Http200, readFile("smplcmts.js"), "application/javascript;charset=utf-8"
 
 proc errorHandler(request: Request, error: RouteError): Future[ResponseData] {.async.} =
@@ -460,15 +465,15 @@ proc errorHandler(request: Request, error: RouteError): Future[ResponseData] {.a
       of RouteException:
         let e = getCurrentException()
         if e.isNil:
-          resp Http500, "unknown internal error"
+          resp Http500, "unknown internal error", textType
         if e of AuthError:
-          resp Http401, e.msg
+          resp Http401, e.msg, textType
         elif e of ValueError:
-          resp Http400, e.msg
+          resp Http400, e.msg, textType
         else:
           logging.debug e.msg
           logging.debug e.getStackTrace
-          resp Http500, e.msg
+          resp Http500, e.msg, textType
       of RouteCode:
         discard
 
