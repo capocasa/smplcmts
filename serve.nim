@@ -81,7 +81,7 @@ proc auth(request: Request): Auth =
     raise newException(AuthError, "Please request a comment link by email to start commenting")
 
   try:
-    kv.withTransaction t:
+    kv.main.withTransaction t:
       let value = t["session $#" % saltedHash(result.sessionToken)]
       discard parseSaturatedNatural(value, result.user.id)
       result.user.username = t["userId $# username" % $result.user.id]
@@ -198,11 +198,11 @@ ORDER BY
     if auth.user.username == "":
       resp Http200, formatName(), htmlType
     let cachedComment = try:
-      kv["cache $# $# comment" % [$auth.user.id, request.params["url"]]]
+      kv.main["cache $# $# comment" % [$auth.user.id, request.params["url"]]]
     except KeyError:
       ""
     let cachedReplyTo = try:
-      kv["cache $# $# reply-to" % [$auth.user.id, request.params["url"]]].unserializeReplyTo().some
+      kv.main["cache $# $# reply-to" % [$auth.user.id, request.params["url"]]].unserializeReplyTo().some
     except KeyError:
       none(Comment)
 
@@ -220,7 +220,7 @@ ORDER BY
     let url = request.params["url"]
     let notify = "notify" in request.params
     let signinKey = "signin $#" % saltedHash(authToken)
-    kv[signinKey] = "$# $# $#" % [saltedHash(email), url, if notify: email else: ""]
+    kv.main[signinKey] = "$# $# $#" % [saltedHash(email), url, if notify: email else: ""]
     expiry[signinKey] = initDuration(hours=1)
     withAsyncSmtp:
       try:
@@ -240,7 +240,7 @@ Please make sure you don't give it to anyone else so no one can comment in your 
 
   delete "/signin":
     let auth = request.auth
-    kv.withTransaction t:
+    kv.main.withTransaction t:
       let key = "session $#" % saltedHash(auth.sessionToken)
       let value = t[key]
       t.del key
@@ -253,7 +253,7 @@ Please make sure you don't give it to anyone else so no one can comment in your 
     var sessionToken, sessionKey: string
     var emailHash, redirectUrl, email: string
     try:
-      kv.withTransaction t:
+      kv.main.withTransaction t:
         db.exec("BEGIN")
         let authValue = t[authKey]
         t.del authKey, authValue
@@ -314,7 +314,7 @@ Please make sure you don't give it to anyone else so no one can comment in your 
       db.exec(""" UPDATE user SET username = ? WHERE id = ? """, username, auth.user.id)
     except SqliteError:
       resp Http409, "Someone already chose that name!", textType
-    kv["userId $# username" % $auth.user.id] = username
+    kv.main["userId $# username" % $auth.user.id] = username
     resp Http200, "Thank you! You are now known as: $#" % username, textType
 
   post "/publish":
@@ -353,7 +353,7 @@ Please make sure you don't give it to anyone else so no one can comment in your 
       for row in db.iterate(""" SELECT DISTINCT user_id, email_hash FROM comment LEFT JOIN user ON user.id=user_id WHERE url_id=? AND user_id !=? """, urlId, auth.user.id):
         let (userId, emailHash) = row.unpack((int, string))
         let email = try:
-          kv["userId $# notify" % $userId]
+          kv.main["userId $# notify" % $userId]
         except KeyError:
           continue
 
@@ -403,11 +403,11 @@ $#/unsubscribe/$#
     let cacheKey = "cache $# $# $#" % [$user_id, url, key]
     if value == "":
       try:
-        kv.del cacheKey
+        kv.main.del cacheKey
       except KeyError:
         discard
     else:
-      kv[cacheKey] = value
+      kv.main[cacheKey] = value
     if expiry.k2t.hasKey(cacheKey):
       # workaround for yet unexplored mixin conflict
       expiry.t2k.del expiry.k2t[cacheKey]
@@ -449,7 +449,7 @@ $#/unsubscribe/$#
     else:
       -1
     try:
-      kv.del "userId $# notify" % $userId
+      kv.main.del "userId $# notify" % $userId
     except KeyError:
       resp Http409, "You already do not receive an email when someone comments.", textType
     resp Http200, "You will no longer receive an email when someone comments.", textType

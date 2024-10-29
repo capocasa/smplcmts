@@ -1,4 +1,4 @@
-import asyncdispatch, times, strutils
+import asyncdispatch, times 
 
 import limdb, at
 
@@ -7,18 +7,23 @@ export limdb, at
 type
   LimAt = At[Database[Time, string], Database[string, Time]]
 
-proc initKeyValue*(kvPath: string):(Database[string,string], LimAt) =
+proc initKeyValue*(kvPath: string):auto =
 
-  let l = initDatabase(kvPath, (kv: string, t2s: Time, string, s2t: string, Time))
+  let kv = initDatabase(
+    kvPath, (
+    main: string,
+    t2s: Time, string,
+    s2t: string, Time
+  ))
 
   let expiry:LimAt = block:
     proc trigger(t: Time, k: string) =
       try:
-        del l.kv, k
+        del kv.main, k
       except KeyError:
         discard
-    initAt(l.t2s, l.s2t)
+    initAt(kv.t2s, kv.s2t)
   asyncCheck expiry.process()
-  (l.kv, expiry)
+  (kv, expiry)
 
 
