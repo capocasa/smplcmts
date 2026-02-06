@@ -40,7 +40,9 @@ dropdb                Delete database. This is destructive.
   of cmdArgument:
     case key:
     of "initdb":
-      database.initDatabase(config.sqlPath).initDb()
+      let dbs = database.initDatabase(config.sqlPath)
+      for i,db in dbs:
+        discard
       quit 0
     of "dropdb":
       dropDb(config.sqlPath)

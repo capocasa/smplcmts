@@ -15,3 +15,16 @@ type
     lovedByMe*: bool
     replyTo*: ref Comment
 
+  AuthError* = object of ValueError
+  Auth* = object
+    user*: User
+    sessionToken*: string
+  Login* = object
+    emailHash*: string
+    url*: string
+    notify*: string
+    siteId*: int
+
+  CacheKey* = enum
+    ckComment, ckReplyTo
+

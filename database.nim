@@ -1,13 +1,12 @@
 
 import tiny_sqlite
-import times
-from os import removeFile
+import std/[times,os,tables,strutils]
 
-export tiny_sqlite
+export tiny_sqlite, tables
 
-proc initDatabase*(sqlPath: string): DbConn =
-  result = openDatabase(sqlPath)
-  result.exec("PRAGMA foreign_keys = OFF")
+proc initDatabase*(sqlPath: string): OrderedTable[int, DbConn] =
+  for p in walkDir sqlPath:
+    result[parseInt(p.path)] = openDatabase(sqlPath & "/" & p.path)
 
 proc initDb*(db: DbConn) =
   db.execScript("""
