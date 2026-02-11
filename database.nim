@@ -6,7 +6,7 @@ export tiny_sqlite, tables
 
 proc initDatabase*(sqlPath: string): OrderedTable[int, DbConn] =
   for p in walkDir sqlPath:
-    result[parseInt(p.path)] = openDatabase(sqlPath & "/" & p.path)
+    result[parseInt(extractFilename(p.path))] = openDatabase(p.path)
 
 proc initDb*(db: DbConn) =
   db.execScript("""

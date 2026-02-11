@@ -277,15 +277,15 @@ Please make sure you don't give it to anyone else so no one can sign in in your 
   get "/login/@authToken":
     request.ip.abortIfBanned
     # note no corsHeaders() required
-    let db = db[request.siteId]
     var sessionToken:string
     var login: Login
     try:
       kv.withTransaction t:
-        db.exec("BEGIN")
         let key = saltedHash(@"authToken")
         login = t.login[key]
         t.login.del key
+        let db = db[login.siteId]
+        db.exec("BEGIN")
         let row = db.one(""" SELECT id, username, email_hash FROM user WHERE email_hash = ? """, login.emailHash)
         let user = if row.isSome:
           unpack[User](row.get)
@@ -307,13 +307,12 @@ Please make sure you don't give it to anyone else so no one can sign in in your 
           t.notify[user.id] = login.notify
 
     except KeyError:
-      db.exec("ROLLBACK")
       request.ip.shortBan
       resp Http401, "No link matching this one was sent recently, please check that it is the right one", textType
     except CatchableError:
-      db.exec("ROLLBACK")
+      db[login.siteId].exec("ROLLBACK")
       raise
-    db.exec("COMMIT")
+    db[login.siteId].exec("COMMIT")
     #expiry[sessionKey] = initDuration(days=7, hours=1) # let cookie expire for security, cleanup token a bit later
     
     # TODO: try domain from redirectUrl

@@ -2,3 +2,7 @@ smplcmts.sqlite
 smplcmts.lmdb
 smplcmts
 tags
+deps/
+nimcache/
+register_site
+.playwright-mcp/

@@ -10,6 +10,7 @@
   var message = container.getElementsByTagName('mark')[0]
   var script = new URL(document.currentScript.src)
   var base = script.protocol + '//' + script.host
+  var site = script.searchParams.get('site') || location.hostname
   var url = location.protocol + '//' + location.host + location.pathname
   class HTTPException extends Error {}
   async function load(method, path, body) {
@@ -26,9 +27,9 @@
     if ( ! response.ok ) throw new HTTPException(text)
     return text
   }
-  comments.outerHTML = await load('get', '/comments?url='+url)
+  comments.outerHTML = await load('get', '/comments?site='+site+'&url='+url)
   comments = container.getElementsByTagName('div')[0]
-  form.outerHTML = await load('get', '/publish?url='+url)
+  form.outerHTML = await load('get', '/publish?site='+site+'&url='+url)
   form = container.getElementsByTagName('form')[0]
   function prev(e) {
     e.preventDefault()
@@ -41,16 +42,17 @@
     try {
       var formdata = new FormData(e.target)
       formdata.set('url', url)
+      formdata.set('site', site)
       var comment
       for (el of e.target.getElementsByTagName('div'))
         if (el.hasAttribute('contenteditable'))
           comment = el.innerHTML
       formdata.set('comment', comment)
       message.innerText = await load(method, action, formdata)
-      form.outerHTML = await load('get', '/publish?url='+url)
+      form.outerHTML = await load('get', '/publish?site='+site+'&url='+url)
       form = container.getElementsByTagName('form')[0]
       if (action == '/publish') {
-        comments.outerHTML = await load('get', '/comments?url='+url)
+        comments.outerHTML = await load('get', '/comments?site='+site+'&url='+url)
         comments = container.getElementsByTagName('div')[0]
       }
     } catch (e) {
@@ -60,11 +62,12 @@
   })
   async function followLink(target) {
     let href = target.attributes.href.value
+    let sep = href.includes('?') ? '&' : '?'
     let method = target.attributes.method.value
-    message.innerText = await load(method, href)
-    form.outerHTML = await load('get', '/publish?url='+url)
+    message.innerText = await load(method, href + sep + 'site=' + site)
+    form.outerHTML = await load('get', '/publish?site='+site+'&url='+url)
     form = container.getElementsByTagName('form')[0]
-    comments.outerHTML = await load('get', '/comments?url='+url)
+    comments.outerHTML = await load('get', '/comments?site='+site+'&url='+url)
     comments = container.getElementsByTagName('div')[0]
     if (target.classList.contains("reply")) {
       window.location.hash = "comment-form"
@@ -112,7 +115,8 @@
     if (!e.target.hasAttribute("contenteditable")) return
     await load('put', '/cache/comment', {
       comment: e.target.innerHTML,
-      url: url
+      url: url,
+      site: site
     })
     updateFormat()
   })
