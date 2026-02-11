@@ -85,6 +85,8 @@ proc auth(request: Request): Auth =
     raise newException(AuthError, "There is something wrong with your secret comment link, please request a new one by email")
 
 proc siteId(request: Request): int =
+  if not request.params.hasKey("site"):
+    raise newException(ValueError, "missing site parameter")
   kv.site[request.params["site"]]
 
 #proc getDb(request: Request): DbConn =
@@ -271,7 +273,7 @@ Please make sure you don't give it to anyone else so no one can sign in in your 
 
   delete "/login":
     let auth = request.auth
-    kv.session.del auth.sessionToken
+    kv.session.del saltedHash(auth.sessionToken)
     resp Http200, "You are now no longer commenting as $#" % auth.user.username, textType
 
   get "/login/@authToken":
@@ -285,34 +287,26 @@ Please make sure you don't give it to anyone else so no one can sign in in your 
         login = t.login[key]
         t.login.del key
         let db = db[login.siteId]
-        db.exec("BEGIN")
         let row = db.one(""" SELECT id, username, email_hash FROM user WHERE email_hash = ? """, login.emailHash)
         let user = if row.isSome:
           unpack[User](row.get)
         else:
-          db.exec(""" INSERT INTO user (email_hash) VALUES (?) """, login.emailHash)
-          var user:User
-          user.id = db.lastInsertRowId()
-          user.emailHash = login.emailHash
-          user
+          User(id: 0, username: "", emailHash: login.emailHash)
 
         sessionToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
         t.session[saltedHash(sessionToken)] = user
-        if login.notify == "":
-          try:
-            t.notify.del user.id
-          except KeyError:
-            discard
-        else:
-          t.notify[user.id] = login.notify
+        if user.id > 0:
+          if login.notify == "":
+            try:
+              t.notify.del user.id
+            except KeyError:
+              discard
+          else:
+            t.notify[user.id] = login.notify
 
     except KeyError:
       request.ip.shortBan
       resp Http401, "No link matching this one was sent recently, please check that it is the right one", textType
-    except CatchableError:
-      db[login.siteId].exec("ROLLBACK")
-      raise
-    db[login.siteId].exec("COMMIT")
     #expiry[sessionKey] = initDuration(days=7, hours=1) # let cookie expire for security, cleanup token a bit later
     
     # TODO: try domain from redirectUrl
@@ -335,7 +329,13 @@ Please make sure you don't give it to anyone else so no one can sign in in your 
       resp Http409, "You already chose your name", textType
     let username = request.params["username"].sanitize
     try:
-      db.exec(""" UPDATE user SET username = ? WHERE id = ? """, username, auth.user.id)
+      if auth.user.id == 0:
+        db.exec(""" INSERT INTO user (username, email_hash) VALUES (?, ?) """, username, auth.user.emailHash)
+        let userId = db.lastInsertRowId()
+        kv.session[saltedHash(auth.sessionToken)] = User(id: userId, username: username, emailHash: auth.user.emailHash)
+      else:
+        db.exec(""" UPDATE user SET username = ? WHERE id = ? """, username, auth.user.id)
+        kv.session[saltedHash(auth.sessionToken)] = User(id: auth.user.id, username: username, emailHash: auth.user.emailHash)
     except SqliteError:
       resp Http409, "Someone already chose that name!", textType
     kv.main["userId $# username" % $auth.user.id] = username
@@ -347,7 +347,7 @@ Please make sure you don't give it to anyone else so no one can sign in in your 
     let siteId = request.siteId
     let db = db[siteId]
     for k in request.params.keys:
-      if k notin ["reply-to", "comment", "url"]:
+      if k notin ["reply-to", "comment", "url", "site"]:
         raise newException(ValueError, "Invalid key $#" % k)
     let url = request.params["url"]
     var urlId, commentId: int
@@ -459,7 +459,10 @@ $#/unsubscribe/$#
         resp Http404, "Cannot cache '$#', must be 'comment' or 'reply-to'" % @"key", textType
     let value = request.params[@"key"]
 
-    if key == ckReplyTo and value.len > 0:
+    if value.len == 0:
+      # clear cached value
+      cache(siteId, auth.user.id, url, key, "")
+    elif key == ckReplyTo:
       # reply-to: cache entire reply
       let row = db.one(""" SELECT comment.id, timestamp, username, comment FROM comment LEFT JOIN user ON user_id=user.id WHERE comment.id=? """, value)
       if row.isNone:

@@ -20,10 +20,9 @@ CREATE TABLE user(
   id INTEGER PRIMARY KEY,
   username TEXT NOT NULL DEFAULT '',
   email_hash TEXT NOT NULL,
-  UNIQUE(username),
   UNIQUE(email_hash)
 );
-CREATE UNIQUE INDEX idx_user_username ON user(username);
+CREATE UNIQUE INDEX idx_user_username ON user(username) WHERE username != '';
 CREATE UNIQUE INDEX idx_user_email_hash ON user(email_hash);
 
 
