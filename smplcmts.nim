@@ -3,20 +3,16 @@ import std/[os, strutils]
 import cligen/parseopt3
 import database, serve, configuration
 
-from jester import newSettings
-from nativesockets import Port
-
-var settings = newSettings()
+var port = 5000
 var config = initConfig()
 
 var p = initOptParser(shortNoVal = {'v', 'h'}, longNoVal = @["version", "help"])
 for kind, key, val in p.getopt():
-  # echo "kind: ", $kind, " key: ", $key, " val: ", $val
   case kind
   of cmdShortOption, cmdLongOption:
     case key:
     of "h", "help":
-      echo """Usage: nimcomment [ARGUMENT] [OPTION]
+      echo """Usage: smplcmts [ARGUMENT] [OPTION]
 
 Comment server
 
@@ -26,14 +22,14 @@ dropdb                Delete database. This is destructive.
 
 -v, --version         display version and quit
 -h, --help            display this help and quit
--p, --port            port number 
+-p, --port            port number
 """
       quit 0
     of "v", "version":
-      echo "0.1.0" 
+      echo "0.1.0"
       quit 0
     of "p", "port":
-      settings.port = parseInt(val).Port
+      port = parseInt(val)
     else:
       stderr.writeLine("Invalid option '$#'" % val)
       quit 1
@@ -56,4 +52,4 @@ dropdb                Delete database. This is destructive.
   of cmdEnd:
     discard
 
-serve(settings)
+serve(port)

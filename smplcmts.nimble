@@ -9,12 +9,13 @@ backend       = "c"
 
 # Dependencies
 
-requires "nim >= 1.6.0"
+requires "nim >= 2.0.0"
 requires "cligen"
-requires "jester#master"
+requires "mummy >= 0.4.0"
+requires "webby >= 0.2.0"
 requires "tiny_sqlite"
-requires "ago#head"
+requires "ago >= 0.1.0"
 requires "limdb"
-requires "at#head"
+requires "at >= 0.1.0"
 requires "smtp"
 requires "htmlparser"

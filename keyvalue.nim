@@ -1,8 +1,20 @@
-import std/[asyncdispatch,times,strutils]
-import pkg/[limdb, at]
+import std/[times,strutils]
+import pkg/[limdb,tat]
 import types
 
-export limdb, at
+export limdb, tat
+
+# Time serialization for LMDB
+template toBlob*(t: Time): Blob =
+  let timeStr = $t.toUnix & "." & $t.nanosecond
+  Blob(mvSize: timeStr.len.uint, mvData: cast[pointer](timeStr.cstring))
+
+proc fromBlob*(b: Blob, T: typedesc[Time]): Time =
+  let s = fromBlob(b, string)
+  let parts = s.split('.')
+  result = fromUnix(parts[0].parseBiggestInt)
+  if parts.len > 1:
+    result += initDuration(nanoseconds = parts[1].parseInt)
 
 # Custom toBlob/fromBlob for types containing strings.
 # LimDB's generic object serialization stores raw pointers which
@@ -32,7 +44,7 @@ proc fromBlob*(b: Blob, T: typedesc[Login]): Login =
   result.siteId = parts[3].parseInt
 
 type
-  LimAt = At[Database[Time, string], Database[string, Time]]
+  LimTat = Tat[Database[Time, string], Database[string, Time]]
 
 proc initKeyValue*(kvPath: string):auto =
 
@@ -40,7 +52,7 @@ proc initKeyValue*(kvPath: string):auto =
     kvPath, (
     main: string,
     site: string, int,
-    cache: (int, string, CacheKey), string,
+    cache: string, string,  # key serialized as "userId\x1Furl\x1FcacheKey"
     login: string, Login,
     session: string, User,
     notify: int, string,
@@ -48,20 +60,9 @@ proc initKeyValue*(kvPath: string):auto =
     s2t: string, Time
   ))
 
-  let expiry:LimAt = block:
-    proc trigger(t: Time, k: string) =
-      try:
-        del kv.main, k
-        # just deleting in both is very dirty
-        # but databases keys are single digits
-        # so we will fix later
-        # TODO: make this capable of expiring any key in here
-        # probably requires expanding At
-        # del kv.site, k
-        # del kv.login, k
-      except KeyError:
-        discard
-    initAt(kv.t2s, kv.s2t)
-  asyncCheck expiry.process()
+  let expiry:LimTat = initTat(kv.t2s, kv.s2t)
+  # Don't call expiry.process() here - the trigger would capture kv as a closure,
+  # which breaks {.thread.}. Instead, serve.nim defines trigger using its global kv
+  # and calls expiry.process() after initGlobals.
   (kv, expiry)
 

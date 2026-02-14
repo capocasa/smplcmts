@@ -1,6 +1,6 @@
-import std/[strutils, times, tables, options, parseutils, uri, sequtils, re, logging]
-import pkg/jester except error, routeException
-import pkg/jester/private/utils
+import std/[strutils, times, tables, options, parseutils, uri, sequtils, re, logging, cookies, locks]
+import pkg/mummy, pkg/mummy/routers
+import pkg/webby
 import types, database, keyvalue, mail, secret
 import configuration, serialize, sanitize
 
@@ -10,11 +10,41 @@ include "name.nimf"
 include "login.nimf"
 
 const
+  banMilliseconds {.intdefine.} = 3000
   config = initConfig()
 
-let
-  db* = database.initDatabase(config.sqlPath)
-  (kv*, expiry*) = initKeyValue(config.kvPath)
+var
+  lock: Lock
+  db: OrderedTable[int, DbConn]
+  kv: typeof(initKeyValue(config.kvPath)[0])
+  expiry: typeof(initKeyValue(config.kvPath)[1])
+
+initLock(lock)
+
+template withGl(body: untyped) =
+  {.gcsafe.}:
+    withLock lock:
+      body
+
+# Trigger for expiry - defined at module level to avoid closure capture
+proc trigger(t: Time, k: string) =
+  withGl:
+    try:
+      del kv.main, k
+    except KeyError:
+      discard
+
+proc initGlobals*() =
+  withGl:
+    db = database.initDatabase(config.sqlPath)
+    (kv, expiry) = initKeyValue(config.kvPath)
+  GC_ref(expiry)
+  expiry.process()
+
+proc cleanup*() =
+  expiry.stop()
+
+var server*: Server
 
 proc base(uri: Uri): string =
   if uri.scheme != "":
@@ -27,6 +57,17 @@ proc base(uri: Uri): string =
     result.add(":")
     result.add(uri.port)
 
+proc parseCookies(request: Request): Table[string, string] =
+  result = initTable[string, string]()
+  try:
+    let cookieHeader = request.headers["cookie"]
+    for pair in cookieHeader.split("; "):
+      let parts = pair.split("=", 1)
+      if parts.len == 2:
+        result[parts[0].strip] = parts[1].strip
+  except KeyError:
+    discard
+
 proc origin(request: Request): string =
   try:
     let u = parseUri(request.headers["origin"])
@@ -34,78 +75,117 @@ proc origin(request: Request): string =
   except KeyError, ValueError:
     return "null"
   if result notin config.allowedOrigins:
-    return "null"  # TODO: error message here
+    return "null"
 
-template setHeader(key, value: string) =
-  setHeader(result[2], key, value)
+proc getHeader(headers: HttpHeaders, key: string, default = ""): string =
+  try:
+    headers[key]
+  except KeyError:
+    default
 
-template corsHeaders() =
-  setHeader("Access-Control-Allow-Origin", request.origin)
-  setHeader("Access-Control-Allow-Credentials", "true")
-  setHeader("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
-  setHeader("Cross-Origin-Resource-Policy", "cross-origin")
+proc corsHeaders(request: Request): HttpHeaders =
+  result["Access-Control-Allow-Origin"] = request.origin
+  result["Access-Control-Allow-Credentials"] = "true"
+  result["Access-Control-Allow-Methods"] = "GET, PUT, POST, DELETE, OPTIONS"
+  result["Cross-Origin-Resource-Policy"] = "cross-origin"
 
 const textType = "text/plain;charset=utf-8"
 const htmlType = "text/html;charset=utf-8"
 
-template shortBan(ip: string) =
-  ## Simple short IP ban for any auth failure to prevent brute-forcing session or auth tokens.
-  ## This is feasible because we use really long ones- therefore, no complex schemes like escalating bans
-  ## or captchas are required.
-  {.cast(gcsafe)}:
-    expiry["ban $#" % ip] = initDuration(seconds=3)
+proc ip(request: Request): string =
+  # Try X-Forwarded-For first, then fall back to remoteAddress
+  try:
+    request.headers["x-forwarded-for"].split(",")[0].strip
+  except KeyError:
+    request.remoteAddress
+
+proc shortBan(ip: string) =
+  withGl:
+    expiry["ban $#" % ip] = initDuration(milliseconds=banMilliseconds)
 
 proc abortIfBanned(ip: string) =
-  ## Enforce IP ban
-  try:
-    let bannedUntil = expiry.k2t["ban $#" % ip]
-    let remaining = (bannedUntil - getTime()).inSeconds
-    if remaining > 0:
-      raise newException(AuthError, "Please try again in $# seconds" % $remaining)
-    else:
-      # no ban, continue (will be cleaned up later)
+  var bannedUntil: Time
+  var found = false
+  withGl:
+    try:
+      bannedUntil = expiry.k2t["ban $#" % ip]
+      found = true
+    except KeyError:
       discard
-  except KeyError:
-    # no ban, continue
-    discard
+  if found:
+    let remainingMs = (bannedUntil - getTime()).inMilliseconds
+    if remainingMs > 0:
+      let remainingSec = (remainingMs + 999) div 1000  # Round up to seconds for message
+      raise newException(AuthError, "Please try again in $# seconds" % $remainingSec)
 
 proc auth(request: Request): Auth =
-
   request.ip.abortIfBanned
-
-  result.sessionToken = if request.cookies.hasKey("CommentSessionToken"):
-    request.cookies["CommentSessionToken"]
+  let cookies = request.parseCookies
+  result.sessionToken = if cookies.hasKey("CommentSessionToken"):
+    cookies["CommentSessionToken"]
   else:
     raise newException(AuthError, "Please request a comment link by email to start commenting")
-
-  try:
-    result.user = kv.session[saltedHash(result.sessionToken)]
-  except KeyError:
+  var notFound = false
+  withGl:
+    try:
+      result.user = kv.session[saltedHash(result.sessionToken)]
+    except KeyError:
+      notFound = true
+  if notFound:
     request.ip.shortBan
     raise newException(AuthError, "There is something wrong with your secret comment link, please request a new one by email")
 
+proc param(request: Request, key: string): string =
+  # Check query params first, then form body
+  for (k, v) in request.queryParams:
+    if k == key:
+      return v
+  # Parse form body if content-type is form
+  if "application/x-www-form-urlencoded" in request.headers.getHeader("content-type", ""):
+    for (k, v) in parseSearch(request.body):
+      if k == key:
+        return v
+  raise newException(KeyError, "param not found: " & key)
+
+proc paramOpt(request: Request, key: string): Option[string] =
+  try:
+    some(request.param(key))
+  except KeyError:
+    none(string)
+
+proc hasParam(request: Request, key: string): bool =
+  request.paramOpt(key).isSome
+
+proc paramKeys(request: Request): seq[string] =
+  for (k, v) in request.queryParams:
+    result.add k
+  if "application/x-www-form-urlencoded" in request.headers.getHeader("content-type", ""):
+    for (k, v) in parseSearch(request.body):
+      result.add k
+
 proc siteId(request: Request): int =
-  if not request.params.hasKey("site"):
+  let site = request.paramOpt("site")
+  if site.isNone:
     raise newException(ValueError, "missing site parameter")
-  kv.site[request.params["site"]]
+  withGl:
+    result = kv.site[site.get]
 
-#proc getDb(request: Request): DbConn =
-#  db[request.siteId]
-
-template forwardedHost(request: Request): string =
+proc forwardedHost(request: Request): string =
   try:
-    $request.headers["x-forwarded-host"]
+    request.headers["x-forwarded-host"]
   except KeyError:
-    request.host
+    request.headers.getHeader("host", "localhost")
 
-template forwardedPort(request: Request): int =
+proc forwardedPort(request: Request): int =
   try:
-    parseInt request.headers["x-forwarded-port"]
-  except KeyError:
-    request.port
+    parseInt(request.headers["x-forwarded-port"])
+  except KeyError, ValueError:
+    80
+
+proc secure(request: Request): bool =
+  request.headers.getHeader("x-forwarded-proto", "http") == "https"
 
 proc base(request: Request): string =
-  echo "REQUEST ", $request.headers
   let port = request.forwardedPort
   let host = request.forwardedHost
   if request.secure:
@@ -121,30 +201,61 @@ proc base(request: Request): string =
       result.add(":")
       result.add($port)
 
-router comments:
+# Cache helper - key serialized as string to avoid tuple pointer issues
+proc cacheKeyStr(userId: int, url: string, key: CacheKey): string =
+  $userId & "\x1F" & url & "\x1F" & $ord(key)
 
-  get "/":
-    corsHeaders()
-    resp Http200, "ok", textType
+proc cache(siteId, userId: int, url: string, key: CacheKey, value: string) =
+  let cacheKey = cacheKeyStr(userId, url, key)
+  withGl:
+    if value == "":
+      try:
+        kv.cache.del cacheKey
+      except KeyError:
+        discard
+    else:
+      kv.cache[cacheKey] = value
 
-  get "/comments":
-    corsHeaders()
-    let authUserId = try:
-      request.auth.user.id.int
-    except AuthError as e:
-      echo e.msg
-      -1
-    let db = db[request.siteId]
-    iterator comments(): Comment =
-      # note the delimiter ascii-31 is used which is not allowed
-      # by the sanitizer and historic usage fits well semantically
-      for row in db.iterate("""
+# Synchronous SMTP helper
+proc sendMailSync(fromAddr: string, toAddrs: seq[string], msg: string) =
+  var smtp = newSmtp()
+  smtp.connect(config.mailHost, Port(config.mailPort))
+  try:
+    smtp.sendMail(fromAddr, toAddrs, msg)
+  finally:
+    smtp.close()
+
+# Route handlers
+
+proc healthCheck(request: Request) =
+  var headers: HttpHeaders
+  headers["Access-Control-Allow-Origin"] = request.origin
+  headers["Access-Control-Allow-Credentials"] = "true"
+  headers["Access-Control-Allow-Methods"] = "GET, PUT, POST, DELETE, OPTIONS"
+  headers["Cross-Origin-Resource-Policy"] = "cross-origin"
+  headers["Content-Type"] = "text/plain;charset=utf-8"
+  request.respond(200, headers, "ok")
+
+proc getComments(request: Request) =
+  var headers = request.corsHeaders
+  headers["Content-Type"] = htmlType
+  var authUserId: int = try:
+    request.auth.user.id.int
+  except AuthError as e:
+    echo e.msg
+    -1
+  let siteId = request.siteId
+  var siteDb: DbConn
+  withGl:
+    siteDb = db[siteId]
+  iterator comments(): Comment =
+    for row in siteDb.iterate("""
 SELECT
   comment.id,
   comment.timestamp,
   user.username,
   comment.comment,
-  GROUP_CONCAT(loved_by.username, CHAR(31)), 
+  GROUP_CONCAT(loved_by.username, CHAR(31)),
   COALESCE(MAX(loved_by.id = ?), 0),
   reply_to.id,
   reply_to.timestamp,
@@ -176,63 +287,71 @@ GROUP BY
   comment.id
 ORDER BY
   comment.timestamp,user.username
-""", authUserId, request.params["url"]):
-        var offset = 0
-        var comment = unpack[Comment](row, offset, @["id", "timestamp", "name", "comment", "lovedBy", "lovedByMe"])
-        # sqlite could do this with GROUP_CONCAT(DISTINCT ...) but then the delimiter would have to be the default ,
-        comment.lovedBy = comment.lovedBy.deduplicate
-        if row[offset].fromDbValue(Option[int]).isSome:
-          new(comment.replyTo)
-          comment.replyTo[] = unpack[Comment](row, offset, @["id", "timestamp", "name", "comment"])
-        yield comment
-    let authenticated = try:
-      discard request.auth
-      true
-    except AuthError:
-      false
-    resp Http200, formatComments(comments, request.params["url"], authenticated), htmlType
+""", authUserId, request.param("url")):
+      var offset = 0
+      var comment = unpack[Comment](row, offset, @["id", "timestamp", "name", "comment", "lovedBy", "lovedByMe"])
+      comment.lovedBy = comment.lovedBy.deduplicate
+      if row[offset].fromDbValue(Option[int]).isSome:
+        new(comment.replyTo)
+        comment.replyTo[] = unpack[Comment](row, offset, @["id", "timestamp", "name", "comment"])
+      yield comment
+  var authenticated: bool = try:
+    discard request.auth
+    true
+  except AuthError:
+    false
+  withGl:
+    request.respond(200, headers, formatComments(comments, request.param("url"), authenticated))
 
-  get "/publish":
-    corsHeaders()
-    let auth = try:
-      request.auth
-    except AuthError as e:
-      resp Http200,  formatLogin(), htmlType
-    if auth.user.username == "":
-      resp Http200, formatName(), htmlType
+proc getPublish(request: Request) =
+  var headers = request.corsHeaders
+  headers["Content-Type"] = htmlType
+  let auth = try:
+    request.auth
+  except AuthError as e:
+    request.respond(200, headers, formatLogin())
+    return
+  if auth.user.username == "":
+    request.respond(200, headers, formatName())
+    return
+  withGl:
+    let url = request.param("url")
     let cachedComment = try:
-      kv.cache[(auth.user.id, request.params["url"], ckComment)] 
+      kv.cache[cacheKeyStr(auth.user.id, url, ckComment)]
     except KeyError:
       ""
     let cachedReplyTo = try:
-      some(kv.cache[(auth.user.id, request.params["url"], ckReplyTo)].unserializeReplyTo)
+      some(kv.cache[cacheKeyStr(auth.user.id, url, ckReplyTo)].unserializeReplyTo)
     except KeyError:
       none(Comment)
+    request.respond(200, headers, formatPublish(auth.user.username, cachedComment, request.param("url"), cachedReplyTo))
 
-    resp Http200, formatPublish(auth.user.username, cachedComment, request.params["url"], cachedReplyTo), htmlType
+proc getName(request: Request) =
+  var headers = request.corsHeaders
+  headers["Content-Type"] = htmlType
+  request.respond(200, headers, formatName())
 
-  get "/name":
-    corsHeaders()
-    resp Http200, formatName(), htmlType
-
-  post "/login":
-    request.ip.abortIfBanned
-    corsHeaders()
-    let authToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
-    let email = request.params["email"]
-    let url = request.params["url"]
-    let siteId = try:
-      kv.site[ request.params["site"] ]
+proc postLogin(request: Request) =
+  request.ip.abortIfBanned
+  var headers = request.corsHeaders
+  headers["Content-Type"] = textType
+  let authToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
+  let email = request.param("email")
+  let url = request.param("url")
+  var siteId: int
+  withGl:
+    siteId = try:
+      kv.site[request.param("site")]
     except KeyError:
-      resp Http400, "invalid site"
-    let notify = "notify" in request.params
-    let authHash = saltedHash(authToken)
+      request.respond(400, headers, "invalid site")
+      return
+  let notify = request.hasParam("notify")
+  let authHash = saltedHash(authToken)
+  withGl:
     kv.login[authHash] = Login(emailHash: saltedHash(email), url: url, notify: if notify: email else: "", siteId: siteId)
     expiry[authHash] = initDuration(hours=1)
-
-    withAsyncSmtp:
-      try:
-        await smtp.sendMail(config.mailFrom, @[email], $createMessage("Secret Commenting Link", """
+  try:
+    sendMailSync(config.mailFrom, @[email], $createMessage("Secret Commenting Link", """
 
 Thank you! Please follow this link to start commenting:
 
@@ -241,23 +360,24 @@ $#/login/$#
 Please make sure you don't give it to anyone else so no one can comment in your name
 
 """ % [request.base, authToken], @[email]))
-      except ReplyError as e:
-        resp Http409, "The email could not be sent, please take a look at the address.", textType
+  except:
+    request.respond(409, headers, "The email could not be sent, please take a look at the address.")
+    return
+  request.respond(200, headers, """Thank you! Please check your email, you're looking for one called "Secret Commenting Link".""")
 
-    resp Http200, """Thank you! Please check your email, you're looking for one called "Secret Commenting Link".""", textType
-  
-  post "/signup":
-    request.ip.abortIfBanned
-    corsHeaders()
-    let authToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
-    let authHash = saltedHash(authToken)
-    let email = request.params["email"]
+proc postSignup(request: Request) =
+  request.ip.abortIfBanned
+  var headers = request.corsHeaders
+  headers["Content-Type"] = textType
+  let authToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
+  let authHash = saltedHash(authToken)
+  let email = request.param("email")
+  withGl:
     kv.login[authHash] = Login(emailHash: saltedHash(email), url: "https://comments.capo.casa#moderate", notify: "", siteId: -1)
     expiry[authHash] = initDuration(hours=1)
-    withAsyncSmtp:
-      try:
-        await smtp.sendMail(config.mailFrom, @[email], $createMessage("Welcome To Spot on Comments", """
-Thank you for loging up to Spot On Comments!
+  try:
+    sendMailSync(config.mailFrom, @[email], $createMessage("Welcome To Spot on Comments", """
+Thank you for signing up to Spot On Comments!
 
 Please follow this link to receive the code snippet for your web site that will load the comments.
 
@@ -266,33 +386,39 @@ $#/signup/$#
 Please make sure you don't give it to anyone else so no one can sign in in your name
 
 """ % [request.base, authToken], @[email]))
-      except ReplyError as e:
-        resp Http409, "The email could not be sent, please take a look at the address.", textType
+  except:
+    request.respond(409, headers, "The email could not be sent, please take a look at the address.")
+    return
+  request.respond(200, headers, """Thank you! Please check your email, you're looking for one called "Welcome To Spot On Comments".""")
 
-    resp Http200, """Thank you! Please check your email, you're looking for one called "Welcome To Spot On Comments".""", textType
-
-  delete "/login":
-    let auth = request.auth
+proc deleteLogin(request: Request) =
+  var headers = request.corsHeaders
+  headers["Content-Type"] = textType
+  let auth = request.auth  # auth() is already gcsafe
+  withGl:
     kv.session.del saltedHash(auth.sessionToken)
-    resp Http200, "You are now no longer commenting as $#" % auth.user.username, textType
+  request.respond(200, headers, "You are now no longer commenting as $#" % auth.user.username)
 
-  get "/login/@authToken":
-    request.ip.abortIfBanned
-    # note no corsHeaders() required
-    var sessionToken:string
-    var login: Login
+proc getLoginToken(request: Request) =
+  request.ip.abortIfBanned
+  var headers: HttpHeaders
+  headers["Content-Type"] = textType
+  var sessionToken: string
+  var login: Login
+  var failed = false
+  withGl:
     try:
       kv.withTransaction t:
-        let key = saltedHash(@"authToken")
+        let authToken = request.pathParams["authToken"]
+        let key = saltedHash(authToken)
         login = t.login[key]
         t.login.del key
-        let db = db[login.siteId]
-        let row = db.one(""" SELECT id, username, email_hash FROM user WHERE email_hash = ? """, login.emailHash)
+        let siteDb = db[login.siteId]
+        let row = siteDb.one(""" SELECT id, username, email_hash FROM user WHERE email_hash = ? """, login.emailHash)
         let user = if row.isSome:
           unpack[User](row.get)
         else:
           User(id: 0, username: "", emailHash: login.emailHash)
-
         sessionToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
         t.session[saltedHash(sessionToken)] = user
         if user.id > 0:
@@ -303,89 +429,96 @@ Please make sure you don't give it to anyone else so no one can sign in in your 
               discard
           else:
             t.notify[user.id] = login.notify
-
     except KeyError:
-      request.ip.shortBan
-      resp Http401, "No link matching this one was sent recently, please check that it is the right one", textType
-    #expiry[sessionKey] = initDuration(days=7, hours=1) # let cookie expire for security, cleanup token a bit later
-    
-    # TODO: try domain from redirectUrl
-    # let uri= parseUri(redirectUrl)
-    # let origin = uri.base
-    # if origin notin config.allowedOrigins:
-    #  resp Http409, "Origin %s not allowed" % origin
-    # let domain = domain=uri.hostname
-    setCookie("CommentSessionToken", sessionToken, expires=daysForward(7), sameSite=None, httpOnly=true,
-              path="/",secure=true)
-    setHeader("Access-Control-Allow-Headers", "Set-Cookie")
+      failed = true
+  if failed:
+    request.ip.shortBan
+    request.respond(401, headers, "No link matching this one was sent recently, please check that it is the right one")
+    return
 
-    redirect login.url & "#comment-form"
+  let expiryTime = now() + initDuration(days=7)
+  let cookieVal = setCookie("CommentSessionToken", sessionToken, expires=expiryTime.format("ddd',' dd MMM yyyy HH:mm:ss 'GMT'"),
+                            sameSite=SameSite.None, httpOnly=true, path="/", secure=true)
+  headers["Set-Cookie"] = cookieVal
+  headers["Access-Control-Allow-Headers"] = "Set-Cookie"
+  headers["Location"] = login.url & "#comment-form"
+  request.respond(303, headers, "")
 
-  post "/name":
-    corsHeaders()
-    let auth = request.auth
-    let db = db[request.siteId]
-    if auth.user.username != "":
-      resp Http409, "You already chose your name", textType
-    let username = request.params["username"].sanitize
+proc postName(request: Request) =
+  var headers = request.corsHeaders
+  headers["Content-Type"] = textType
+  let auth = request.auth
+  let siteId = request.siteId
+  if auth.user.username != "":
+    request.respond(409, headers, "You already chose your name")
+    return
+  let username = request.param("username").sanitize
+  withGl:
+    let siteDb = db[siteId]
     try:
       if auth.user.id == 0:
-        db.exec(""" INSERT INTO user (username, email_hash) VALUES (?, ?) """, username, auth.user.emailHash)
-        let userId = db.lastInsertRowId()
+        siteDb.exec(""" INSERT INTO user (username, email_hash) VALUES (?, ?) """, username, auth.user.emailHash)
+        let userId = siteDb.lastInsertRowId()
         kv.session[saltedHash(auth.sessionToken)] = User(id: userId, username: username, emailHash: auth.user.emailHash)
       else:
-        db.exec(""" UPDATE user SET username = ? WHERE id = ? """, username, auth.user.id)
+        siteDb.exec(""" UPDATE user SET username = ? WHERE id = ? """, username, auth.user.id)
         kv.session[saltedHash(auth.sessionToken)] = User(id: auth.user.id, username: username, emailHash: auth.user.emailHash)
     except SqliteError:
-      resp Http409, "Someone already chose that name!", textType
+      request.respond(409, headers, "Someone already chose that name!")
+      return
     kv.main["userId $# username" % $auth.user.id] = username
-    resp Http200, "Thank you! You are now known as: $#" % username, textType
+    request.respond(200, headers, "Thank you! You are now known as: $#" % username)
 
-  post "/publish":
-    corsHeaders()
-    let auth = request.auth
-    let siteId = request.siteId
-    let db = db[siteId]
-    for k in request.params.keys:
-      if k notin ["reply-to", "comment", "url", "site"]:
-        raise newException(ValueError, "Invalid key $#" % k)
-    let url = request.params["url"]
-    var urlId, commentId: int
-    let comment = request.params["comment"].sanitizeHtml
+proc postPublish(request: Request) =
+  var headers = request.corsHeaders
+  headers["Content-Type"] = textType
+  let auth = request.auth
+  let siteId = request.siteId
+  for k in request.paramKeys:
+    if k notin ["reply-to", "comment", "url", "site"]:
+      raise newException(ValueError, "Invalid key $#" % k)
+  let url = request.param("url")
+  var urlId, commentId: int
+  let comment = request.param("comment").sanitizeHtml
+  var siteDb: DbConn
+  withGl:
+    siteDb = db[siteId]
+  try:
+    siteDb.exec("BEGIN")
+    let value = siteDb.value(""" SELECT id FROM url WHERE url = ? """, url)
+    urlId = if value.isNone:
+      siteDb.exec(""" INSERT INTO url (url) VALUES (?) """, url)
+      siteDb.lastInsertRowId()
+    else:
+      value.get().fromDbValue(int)
+    siteDb.exec(""" INSERT INTO comment (url_id, user_id, comment) VALUES (?, ?, ?) """, urlId, auth.user.id, comment)
+    commentId = siteDb.lastInsertRowId()
+    let replyToOpt = request.paramOpt("reply-to")
+    if replyToOpt.isSome:
+      var replyTo: Natural
+      discard parseSaturatedNatural(replyToOpt.get, replyTo)
+      siteDb.exec(""" UPDATE comment SET reply_to = ? WHERE id = ? """, replyTo, commentId)
+  except:
+    siteDb.exec("ROLLBACK")
+    raise
+  siteDb.exec("COMMIT")
+
+  for key in [ckComment, ckReplyTo]:
+    cache(siteId, auth.user.id, url, key, "")
+
+  # Send notification emails (non-blocking would require a thread pool, keeping sync for now)
+  var notifyList: seq[(int, string)]
+  for row in siteDb.iterate(""" SELECT DISTINCT user_id, email_hash FROM comment LEFT JOIN user ON user.id=user_id WHERE url_id=? AND user_id !=? """, urlId, auth.user.id):
+    notifyList.add row.unpack((int, string))
+  for (userId, emailHash) in notifyList:
+    var email: string
+    withGl:
+      email = try:
+        kv.main["userId $# notify" % $userId]
+      except KeyError:
+        continue
     try:
-      db.exec("BEGIN")
-      let value = db.value(""" SELECT id FROM url WHERE url = ? """, url)
-      urlId = if value.isNone:
-        db.exec(""" INSERT INTO url (url) VALUES (?) """, url)
-        db.lastInsertRowId()
-      else:
-        value.get().fromDbValue(int)
-      db.exec(""" INSERT INTO comment (url_id, user_id, comment) VALUES (?, ?, ?) """, urlId, auth.user.id, comment)
-      commentId = db.lastInsertRowId()
-      if request.params.hasKey("reply-to"):
-        var replyTo: Natural
-        discard parseSaturatedNatural(request.params["reply-to"], replyTo)
-        db.exec(""" UPDATE comment SET reply_to = ? WHERE id = ? """, replyTo, commentId)
-
-    except:
-      db.exec("ROLLBACK")
-      raise
-    db.exec("COMMIT")
-
-    for key in [ckComment, ckReplyTo]:
-      cache(siteId, auth.user.id, url, key, "")
-
-    withAsyncSmtp:
-      for row in db.iterate(""" SELECT DISTINCT user_id, email_hash FROM comment LEFT JOIN user ON user.id=user_id WHERE url_id=? AND user_id !=? """, urlId, auth.user.id):
-        let (userId, emailHash) = row.unpack((int, string))
-        let email = try:
-          kv.main["userId $# notify" % $userId]
-        except KeyError:
-          continue
-
-        # unlike the auth, these mails are informative, not essential, so don't wait for them to complete before returning
-        # so use asynccheck instead of await
-        await smtp.sendMail(config.mailFrom, @[email], $createMessage("New Comment from $#" % auth.user.username, """
+      sendMailSync(config.mailFrom, @[email], $createMessage("New Comment from $#" % auth.user.username, """
 $# made a comment:
 
 --
@@ -398,127 +531,139 @@ $##comment-$#
 Unsubscribe:
 $#/unsubscribe/$#
 
-""" % [auth.user.username, comment, url, "form", request.base, auth.user.emailHash]))  # "form" should be $commentId but there is a frontend scroll issue
-
-    resp Http200, "Thank you, you published a comment!", textType
-
-  options re".*":
-    corsHeaders()
-    resp Http200
-
-  post "/love/@id":
-    corsHeaders()
-    let auth = request.auth
-    let db = db[request.siteId]
-
-    try:
-      db.exec("BEGIN")
-      let comment_user_id = db.value(""" SELECT user_id FROM comment WHERE id=? """, @"id")
-      let value = db.value(""" SELECT 1 FROM love WHERE user_id=? AND comment_id=? """, auth.user.id, @"id")
-      if value.isSome:
-        db.exec(""" DELETE FROM love WHERE user_id=? AND comment_id=? """, auth.user.id, @"id")
-      else:
-        db.exec(""" INSERT INTO love (user_id, comment_id) VALUES (?, ?) """, auth.user.id, @"id")
+""" % [auth.user.username, comment, url, "form", request.base, auth.user.emailHash]))
     except:
-      db.exec("ROLLBACK")
-      raise
-    db.exec("COMMIT")
-    resp Http200
- 
-  proc cache(siteId, userId: int, url: string, key: CacheKey, value: string) =
-    ## cache an ephemeral user-generated value in key-value store
-    ## empty string as value deletes it
-    let key = (userId, url, key)
-    if value == "":
-      try:
-        kv.cache.del key
-      except KeyError:
-        discard
+      discard  # non-essential, continue
+
+  request.respond(200, headers, "Thank you, you published a comment!")
+
+proc optionsHandler(request: Request) =
+  var headers = request.corsHeaders
+  request.respond(200, headers, "")
+
+proc postLove(request: Request) =
+  var headers = request.corsHeaders
+  let auth = request.auth
+  let siteId = request.siteId
+  var siteDb: DbConn
+  withGl:
+    siteDb = db[siteId]
+  let id = request.pathParams["id"]
+  try:
+    siteDb.exec("BEGIN")
+    let comment_user_id = siteDb.value(""" SELECT user_id FROM comment WHERE id=? """, id)
+    let value = siteDb.value(""" SELECT 1 FROM love WHERE user_id=? AND comment_id=? """, auth.user.id, id)
+    if value.isSome:
+      siteDb.exec(""" DELETE FROM love WHERE user_id=? AND comment_id=? """, auth.user.id, id)
     else:
-      kv.cache[key] = value
-    #if expiry.k2t.hasKey(key):
-      # workaround for yet unexplored mixin conflict
-    #  expiry.t2k.del expiry.k2t[key]
-    #  expiry.k2t.del key 
-    #if value != "":
-      # if not deleting schedule long expiry
-    #  expiry[key] = initDuration(days=30)
+      siteDb.exec(""" INSERT INTO love (user_id, comment_id) VALUES (?, ?) """, auth.user.id, id)
+  except:
+    siteDb.exec("ROLLBACK")
+    raise
+  siteDb.exec("COMMIT")
+  request.respond(200, headers, "")
 
-  put "/cache/@key":
-    corsHeaders()
-    let auth = request.auth
-    let siteId = request.siteId
-    let db = db[siteId]
-    let url = request.params["url"]
-    let key = case @"key":
-      of "comment":
-        ckComment
-      of "reply-to":
-        ckReplyTo
-      else:
-        resp Http404, "Cannot cache '$#', must be 'comment' or 'reply-to'" % @"key", textType
-    let value = request.params[@"key"]
-
-    if value.len == 0:
-      # clear cached value
-      cache(siteId, auth.user.id, url, key, "")
-    elif key == ckReplyTo:
-      # reply-to: cache entire reply
-      let row = db.one(""" SELECT comment.id, timestamp, username, comment FROM comment LEFT JOIN user ON user_id=user.id WHERE comment.id=? """, value)
-      if row.isNone:
-        resp Http409, "reply-to with id $# not found" % value, textType
-      var offset = 0
-      let replyTo = unpack[Comment](row.get, offset, @["id", "timestamp", "name", "comment"])
-      cache(siteId, auth.user.id, url, key, replyTo.serializeReplyTo)
+proc putCache(request: Request) =
+  var headers = request.corsHeaders
+  headers["Content-Type"] = textType
+  let auth = request.auth
+  let siteId = request.siteId
+  var siteDb: DbConn
+  withGl:
+    siteDb = db[siteId]
+  let url = request.param("url")
+  let keyName = request.pathParams["key"]
+  let key = case keyName:
+    of "comment":
+      ckComment
+    of "reply-to":
+      ckReplyTo
     else:
-      # comment: cache as sanitized html
-      cache(siteId, auth.user.id, url, key, value.sanitizeHtml)
+      request.respond(404, headers, "Cannot cache '$#', must be 'comment' or 'reply-to'" % keyName)
+      return
+  let value = request.param(keyName)
 
-    resp Http200, "", textType
+  if value.len == 0:
+    cache(siteId, auth.user.id, url, key, "")
+  elif key == ckReplyTo:
+    let row = siteDb.one(""" SELECT comment.id, timestamp, username, comment FROM comment LEFT JOIN user ON user_id=user.id WHERE comment.id=? """, value)
+    if row.isNone:
+      request.respond(409, headers, "reply-to with id $# not found" % value)
+      return
+    var offset = 0
+    let replyTo = unpack[Comment](row.get, offset, @["id", "timestamp", "name", "comment"])
+    cache(siteId, auth.user.id, url, key, replyTo.serializeReplyTo)
+  else:
+    cache(siteId, auth.user.id, url, key, value.sanitizeHtml)
 
-  get "/unsubscribe/@emailHash":
-    corsHeaders()
-    let db = db[request.siteId]
-    let value = db.value(""" SELECT id FROM user WHERE email_hash = ? """, @"emailHash")
-    let userId = if value.isSome:
-      value.get.fromDbValue(int)
-    else:
-      -1
+  request.respond(200, headers, "")
+
+proc getUnsubscribe(request: Request) =
+  var headers = request.corsHeaders
+  headers["Content-Type"] = textType
+  let siteId = request.siteId
+  var siteDb: DbConn
+  withGl:
+    siteDb = db[siteId]
+  let emailHash = request.pathParams["emailHash"]
+  let value = siteDb.value(""" SELECT id FROM user WHERE email_hash = ? """, emailHash)
+  let userId = if value.isSome:
+    value.get.fromDbValue(int)
+  else:
+    -1
+  withGl:
     try:
       kv.notify.del userId
     except KeyError:
-      resp Http409, "You already do not receive an email when someone comments.", textType
-    resp Http200, "You will no longer receive an email when someone comments.", textType
+      request.respond(409, headers, "You already do not receive an email when someone comments.")
+      return
+  request.respond(200, headers, "You will no longer receive an email when someone comments.")
 
-  # serve static files manually to set cors headers
-  get "/smplcmts.css":
-    corsHeaders()
-    resp Http200, readFile("smplcmts.css"), "text/css;charset=utf-8"
-  get "/smplcmts.js":
-    corsHeaders()
-    resp Http200, readFile("smplcmts.js"), "application/javascript;charset=utf-8"
+proc getCss(request: Request) =
+  var headers = request.corsHeaders
+  headers["Content-Type"] = "text/css;charset=utf-8"
+  request.respond(200, headers, readFile("smplcmts.css"))
 
-proc errorHandler(request: Request, error: RouteError): Future[ResponseData] {.async.} =
-  block route:
-    case error.kind:
-      of RouteException:
-        let e = getCurrentException()
-        if e.isNil:
-          resp Http500, "unknown internal error", textType
-        if e of AuthError:
-          resp Http401, e.msg, textType
-        elif e of ValueError:
-          resp Http400, e.msg, textType
-        else:
-          logging.debug e.msg
-          logging.debug e.getStackTrace
-          resp Http500, e.msg, textType
-      of RouteCode:
-        discard
+proc getJs(request: Request) =
+  var headers = request.corsHeaders
+  headers["Content-Type"] = "application/javascript;charset=utf-8"
+  request.respond(200, headers, readFile("smplcmts.js"))
 
-proc serve*(settings: Settings) =
-  var jester = initJester(comments, settings=settings)
-  if defined(release):
-    jester.register(errorHandler)
-  jester.serve()
+proc errorHandler(request: Request, e: ref Exception) =
+  var headers = request.corsHeaders
+  headers["Content-Type"] = textType
+  if e of AuthError:
+    request.respond(401, headers, e.msg)
+  elif e of ValueError:
+    request.respond(400, headers, e.msg)
+  else:
+    logging.debug e.msg
+    logging.debug e.getStackTrace
+    request.respond(500, headers, e.msg)
 
+proc serve*(port: int = 5000) =
+  initGlobals()
+  var router: Router
+  router.get("/", healthCheck)
+  router.get("/comments", getComments)
+  router.get("/publish", getPublish)
+  router.get("/name", getName)
+  router.post("/login", postLogin)
+  router.post("/signup", postSignup)
+  router.delete("/login", deleteLogin)
+  router.get("/login/@authToken", getLoginToken)
+  router.post("/name", postName)
+  router.post("/publish", postPublish)
+  router.post("/love/@id", postLove)
+  router.put("/cache/@key", putCache)
+  router.get("/unsubscribe/@emailHash", getUnsubscribe)
+  router.get("/smplcmts.css", getCss)
+  router.get("/smplcmts.js", getJs)
+  # OPTIONS for all paths
+  router.options("/**", optionsHandler)
+
+  router.errorHandler = errorHandler
+
+  server = newServer(router)
+  echo "Serving on http://localhost:", port
+  server.serve(Port(port))
