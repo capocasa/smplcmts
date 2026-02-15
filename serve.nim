@@ -1,4 +1,4 @@
-import std/[strutils, times, tables, options, parseutils, uri, sequtils, re, logging, cookies, locks]
+import std/[strutils, times, tables, sharedtables, options, parseutils, uri, sequtils, logging]
 import pkg/mummy, pkg/mummy/routers
 import pkg/webby
 import types, database, keyvalue, mail, secret
@@ -13,17 +13,17 @@ const
   banMilliseconds {.intdefine.} = 3000
   config = initConfig()
 
-var
-  globalsInitialized: bool
-  db: Table[int, DbConn]
-  dbLocks: Table[int, Lock]
-  kv: typeof(initKeyValue(config.kvPath)[0])
-  expiry: typeof(initKeyValue(config.kvPath)[1])
+var db: SharedTable[int, DbConn]
+init(db)
+for siteId, conn in database.initDatabase(config.sqlPath):
+  db[siteId] = conn
 
-proc getDb(siteId: int): DbConn {.gcsafe.} =
-  {.cast(gcsafe).}:
-    withLock dbLocks[siteId]:
-      result = db[siteId]
+var (kv, expiry) = initKeyValue(config.kvPath)
+
+proc getDb(siteId: int): DbConn =
+  db.withValue(siteId, val):
+    return val[]
+  raise newException(KeyError, "site not found: " & $siteId)
 
 # Trigger for expiry - defined at module level to avoid closure capture
 proc trigger(t: Time, k: string) =
@@ -32,18 +32,7 @@ proc trigger(t: Time, k: string) =
   except KeyError:
     discard
 
-proc initGlobals*() =
-  if globalsInitialized: return
-  globalsInitialized = true
-  db = database.initDatabase(config.sqlPath)
-  for siteId in db.keys:
-    dbLocks[siteId] = Lock()
-    initLock(dbLocks[siteId])
-  (kv, expiry) = initKeyValue(config.kvPath)
-  expiry.process()
-
-proc cleanup*() =
-  expiry.stop()
+expiry.process()
 
 var server*: Server
 
@@ -168,10 +157,12 @@ proc siteId(request: Request): int =
   result = kv.site[site.get]
 
 proc forwardedHost(request: Request): string =
-  try:
-    request.headers["x-forwarded-host"]
-  except KeyError:
-    request.headers.getHeader("host", "localhost")
+  if "x-forwarded-host" in request.headers:
+    result = request.headers["x-forwarded-host"]
+  elif "host" in request.headers:
+    result = request.headers["host"]
+  else:
+    raise newException(KeyError, "missing host header")
 
 proc forwardedPort(request: Request): int =
   try:
@@ -289,7 +280,7 @@ ORDER BY
         new(comment.replyTo)
         comment.replyTo[] = unpack[Comment](row, offset, @["id", "timestamp", "name", "comment"])
       yield comment
-  var authenticated: bool = try:
+  let authenticated: bool = try:
     discard request.auth
     true
   except AuthError:
@@ -340,16 +331,20 @@ proc postLogin(request: Request) =
   let authHash = saltedHash(authToken)
   kv.login[authHash] = Login(emailHash: saltedHash(email), url: url, notify: if notify: email else: "", siteId: siteId)
   expiry[authHash] = initDuration(hours=1)
+  let loginUrl = "$#/login/$#" % [request.base, authToken]
+  when defined(debug):
+    echo "DEBUG LOGIN_URL:", loginUrl
+    flushFile(stdout)
   try:
     sendMailSync(config.mailFrom, @[email], $createMessage("Secret Commenting Link", """
 
 Thank you! Please follow this link to start commenting:
 
-$#/login/$#
+$#
 
 Please make sure you don't give it to anyone else so no one can comment in your name
 
-""" % [request.base, authToken], @[email]))
+""" % loginUrl, @[email]))
   except:
     request.respond(409, headers, "The email could not be sent, please take a look at the address.")
     return
@@ -424,8 +419,9 @@ proc getLoginToken(request: Request) =
     return
 
   let expiryTime = now() + initDuration(days=7)
-  let cookieVal = setCookie("CommentSessionToken", sessionToken, expires=expiryTime.format("ddd',' dd MMM yyyy HH:mm:ss 'GMT'"),
-                            sameSite=SameSite.None, httpOnly=true, path="/", secure=true)
+  let cookieVal = "CommentSessionToken=" & sessionToken &
+    "; Path=/; Expires=" & expiryTime.format("ddd',' dd MMM yyyy HH:mm:ss 'GMT'") &
+    "; Secure; HttpOnly; SameSite=None"
   headers["Set-Cookie"] = cookieVal
   headers["Access-Control-Allow-Headers"] = "Set-Cookie"
   headers["Location"] = login.url & "#comment-form"
@@ -466,8 +462,7 @@ proc postPublish(request: Request) =
   let url = request.param("url")
   var urlId, commentId: int
   let comment = request.param("comment").sanitizeHtml
-  var siteDb: DbConn
-  siteDb = getDb(siteId)
+  let siteDb = getDb(siteId)
   try:
     siteDb.exec("BEGIN")
     let value = siteDb.value(""" SELECT id FROM url WHERE url = ? """, url)
@@ -529,8 +524,7 @@ proc postLove(request: Request) =
   var headers = request.corsHeaders
   let auth = request.auth
   let siteId = request.siteId
-  var siteDb: DbConn
-  siteDb = getDb(siteId)
+  let siteDb = getDb(siteId)
   let id = request.pathParams["id"]
   try:
     siteDb.exec("BEGIN")
@@ -551,8 +545,7 @@ proc putCache(request: Request) =
   headers["Content-Type"] = textType
   let auth = request.auth
   let siteId = request.siteId
-  var siteDb: DbConn
-  siteDb = getDb(siteId)
+  let siteDb = getDb(siteId)
   let url = request.param("url")
   let keyName = request.pathParams["key"]
   let key = case keyName:
@@ -584,8 +577,7 @@ proc getUnsubscribe(request: Request) =
   var headers = request.corsHeaders
   headers["Content-Type"] = textType
   let siteId = request.siteId
-  var siteDb: DbConn
-  siteDb = getDb(siteId)
+  let siteDb = getDb(siteId)
   let emailHash = request.pathParams["emailHash"]
   let value = siteDb.value(""" SELECT id FROM user WHERE email_hash = ? """, emailHash)
   let userId = if value.isSome:
@@ -622,7 +614,6 @@ proc errorHandler(request: Request, e: ref Exception) =
     request.respond(500, headers, e.msg)
 
 proc serve*(port: int = 5000) =
-  initGlobals()
   var router: Router
   router.get("/", healthCheck)
   router.get("/comments", getComments)

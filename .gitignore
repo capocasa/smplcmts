@@ -6,3 +6,6 @@ deps/
 nimcache/
 register_site
 .playwright-mcp/
+nimble.develop
+nimble.paths
+nimbledeps

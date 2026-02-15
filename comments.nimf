@@ -1,6 +1,6 @@
 #? stdtmpl
 # import format
-# proc formatComments*(comments: iterator(): Comment {.gcsafe.}, url: string, authenticated: bool): string {.gcsafe.} =
+# proc formatComments*(comments: iterator(): Comment {.gcsafe.}, url: string, authenticated: bool): string =
 <div class="comments">
 # for comment in comments():
   <div class="comment" id="comment-$comment.id">

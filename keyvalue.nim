@@ -1,8 +1,8 @@
 import std/[times,strutils]
-import pkg/[limdb,tat]
+import pkg/[limdb,at/t]
 import types
 
-export limdb, tat
+export limdb, t
 
 # Time serialization for LMDB
 template toBlob*(t: Time): Blob =
@@ -44,7 +44,7 @@ proc fromBlob*(b: Blob, T: typedesc[Login]): Login =
   result.siteId = parts[3].parseInt
 
 type
-  LimTat = Tat[Database[Time, string], Database[string, Time]]
+  LimAtt = Att[Database[Time, string], Database[string, Time]]
 
 proc initKeyValue*(kvPath: string):auto =
 
@@ -60,7 +60,7 @@ proc initKeyValue*(kvPath: string):auto =
     s2t: string, Time
   ))
 
-  let expiry:LimTat = initTat(kv.t2s, kv.s2t)
+  let expiry = initAtt(kv.t2s, kv.s2t)
   # Don't call expiry.process() here - the trigger would capture kv as a closure,
   # which breaks {.thread.}. Instead, serve.nim defines trigger using its global kv
   # and calls expiry.process() after initGlobals.
