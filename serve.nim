@@ -14,31 +14,32 @@ const
   config = initConfig()
 
 var
-  lock: Lock
-  db: OrderedTable[int, DbConn]
+  globalsInitialized: bool
+  db: Table[int, DbConn]
+  dbLocks: Table[int, Lock]
   kv: typeof(initKeyValue(config.kvPath)[0])
   expiry: typeof(initKeyValue(config.kvPath)[1])
 
-initLock(lock)
-
-template withGl(body: untyped) =
-  {.gcsafe.}:
-    withLock lock:
-      body
+proc getDb(siteId: int): DbConn {.gcsafe.} =
+  {.cast(gcsafe).}:
+    withLock dbLocks[siteId]:
+      result = db[siteId]
 
 # Trigger for expiry - defined at module level to avoid closure capture
 proc trigger(t: Time, k: string) =
-  withGl:
-    try:
-      del kv.main, k
-    except KeyError:
-      discard
+  try:
+    del kv.main, k
+  except KeyError:
+    discard
 
 proc initGlobals*() =
-  withGl:
-    db = database.initDatabase(config.sqlPath)
-    (kv, expiry) = initKeyValue(config.kvPath)
-  GC_ref(expiry)
+  if globalsInitialized: return
+  globalsInitialized = true
+  db = database.initDatabase(config.sqlPath)
+  for siteId in db.keys:
+    dbLocks[siteId] = Lock()
+    initLock(dbLocks[siteId])
+  (kv, expiry) = initKeyValue(config.kvPath)
   expiry.process()
 
 proc cleanup*() =
@@ -100,18 +101,16 @@ proc ip(request: Request): string =
     request.remoteAddress
 
 proc shortBan(ip: string) =
-  withGl:
-    expiry["ban $#" % ip] = initDuration(milliseconds=banMilliseconds)
+  expiry["ban $#" % ip] = initDuration(milliseconds=banMilliseconds)
 
 proc abortIfBanned(ip: string) =
   var bannedUntil: Time
   var found = false
-  withGl:
-    try:
-      bannedUntil = expiry.k2t["ban $#" % ip]
-      found = true
-    except KeyError:
-      discard
+  try:
+    bannedUntil = expiry.k2t["ban $#" % ip]
+    found = true
+  except KeyError:
+    discard
   if found:
     let remainingMs = (bannedUntil - getTime()).inMilliseconds
     if remainingMs > 0:
@@ -126,11 +125,10 @@ proc auth(request: Request): Auth =
   else:
     raise newException(AuthError, "Please request a comment link by email to start commenting")
   var notFound = false
-  withGl:
-    try:
-      result.user = kv.session[saltedHash(result.sessionToken)]
-    except KeyError:
-      notFound = true
+  try:
+    result.user = kv.session[saltedHash(result.sessionToken)]
+  except KeyError:
+    notFound = true
   if notFound:
     request.ip.shortBan
     raise newException(AuthError, "There is something wrong with your secret comment link, please request a new one by email")
@@ -167,8 +165,7 @@ proc siteId(request: Request): int =
   let site = request.paramOpt("site")
   if site.isNone:
     raise newException(ValueError, "missing site parameter")
-  withGl:
-    result = kv.site[site.get]
+  result = kv.site[site.get]
 
 proc forwardedHost(request: Request): string =
   try:
@@ -207,14 +204,13 @@ proc cacheKeyStr(userId: int, url: string, key: CacheKey): string =
 
 proc cache(siteId, userId: int, url: string, key: CacheKey, value: string) =
   let cacheKey = cacheKeyStr(userId, url, key)
-  withGl:
-    if value == "":
-      try:
-        kv.cache.del cacheKey
-      except KeyError:
-        discard
-    else:
-      kv.cache[cacheKey] = value
+  if value == "":
+    try:
+      kv.cache.del cacheKey
+    except KeyError:
+      discard
+  else:
+    kv.cache[cacheKey] = value
 
 # Synchronous SMTP helper
 proc sendMailSync(fromAddr: string, toAddrs: seq[string], msg: string) =
@@ -245,9 +241,7 @@ proc getComments(request: Request) =
     echo e.msg
     -1
   let siteId = request.siteId
-  var siteDb: DbConn
-  withGl:
-    siteDb = db[siteId]
+  let siteDb = getDb(siteId)
   iterator comments(): Comment =
     for row in siteDb.iterate("""
 SELECT
@@ -300,8 +294,7 @@ ORDER BY
     true
   except AuthError:
     false
-  withGl:
-    request.respond(200, headers, formatComments(comments, request.param("url"), authenticated))
+  request.respond(200, headers, formatComments(comments, request.param("url"), authenticated))
 
 proc getPublish(request: Request) =
   var headers = request.corsHeaders
@@ -314,17 +307,16 @@ proc getPublish(request: Request) =
   if auth.user.username == "":
     request.respond(200, headers, formatName())
     return
-  withGl:
-    let url = request.param("url")
-    let cachedComment = try:
-      kv.cache[cacheKeyStr(auth.user.id, url, ckComment)]
-    except KeyError:
-      ""
-    let cachedReplyTo = try:
-      some(kv.cache[cacheKeyStr(auth.user.id, url, ckReplyTo)].unserializeReplyTo)
-    except KeyError:
-      none(Comment)
-    request.respond(200, headers, formatPublish(auth.user.username, cachedComment, request.param("url"), cachedReplyTo))
+  let url = request.param("url")
+  let cachedComment = try:
+    kv.cache[cacheKeyStr(auth.user.id, url, ckComment)]
+  except KeyError:
+    ""
+  let cachedReplyTo = try:
+    some(kv.cache[cacheKeyStr(auth.user.id, url, ckReplyTo)].unserializeReplyTo)
+  except KeyError:
+    none(Comment)
+  request.respond(200, headers, formatPublish(auth.user.username, cachedComment, request.param("url"), cachedReplyTo))
 
 proc getName(request: Request) =
   var headers = request.corsHeaders
@@ -339,17 +331,15 @@ proc postLogin(request: Request) =
   let email = request.param("email")
   let url = request.param("url")
   var siteId: int
-  withGl:
-    siteId = try:
-      kv.site[request.param("site")]
-    except KeyError:
-      request.respond(400, headers, "invalid site")
-      return
+  siteId = try:
+    kv.site[request.param("site")]
+  except KeyError:
+    request.respond(400, headers, "invalid site")
+    return
   let notify = request.hasParam("notify")
   let authHash = saltedHash(authToken)
-  withGl:
-    kv.login[authHash] = Login(emailHash: saltedHash(email), url: url, notify: if notify: email else: "", siteId: siteId)
-    expiry[authHash] = initDuration(hours=1)
+  kv.login[authHash] = Login(emailHash: saltedHash(email), url: url, notify: if notify: email else: "", siteId: siteId)
+  expiry[authHash] = initDuration(hours=1)
   try:
     sendMailSync(config.mailFrom, @[email], $createMessage("Secret Commenting Link", """
 
@@ -372,9 +362,8 @@ proc postSignup(request: Request) =
   let authToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
   let authHash = saltedHash(authToken)
   let email = request.param("email")
-  withGl:
-    kv.login[authHash] = Login(emailHash: saltedHash(email), url: "https://comments.capo.casa#moderate", notify: "", siteId: -1)
-    expiry[authHash] = initDuration(hours=1)
+  kv.login[authHash] = Login(emailHash: saltedHash(email), url: "https://comments.capo.casa#moderate", notify: "", siteId: -1)
+  expiry[authHash] = initDuration(hours=1)
   try:
     sendMailSync(config.mailFrom, @[email], $createMessage("Welcome To Spot on Comments", """
 Thank you for signing up to Spot On Comments!
@@ -394,9 +383,8 @@ Please make sure you don't give it to anyone else so no one can sign in in your 
 proc deleteLogin(request: Request) =
   var headers = request.corsHeaders
   headers["Content-Type"] = textType
-  let auth = request.auth  # auth() is already gcsafe
-  withGl:
-    kv.session.del saltedHash(auth.sessionToken)
+  let auth = request.auth
+  kv.session.del saltedHash(auth.sessionToken)
   request.respond(200, headers, "You are now no longer commenting as $#" % auth.user.username)
 
 proc getLoginToken(request: Request) =
@@ -406,31 +394,30 @@ proc getLoginToken(request: Request) =
   var sessionToken: string
   var login: Login
   var failed = false
-  withGl:
-    try:
-      kv.withTransaction t:
-        let authToken = request.pathParams["authToken"]
-        let key = saltedHash(authToken)
-        login = t.login[key]
-        t.login.del key
-        let siteDb = db[login.siteId]
-        let row = siteDb.one(""" SELECT id, username, email_hash FROM user WHERE email_hash = ? """, login.emailHash)
-        let user = if row.isSome:
-          unpack[User](row.get)
+  try:
+    kv.withTransaction t:
+      let authToken = request.pathParams["authToken"]
+      let key = saltedHash(authToken)
+      login = t.login[key]
+      t.login.del key
+      let siteDb = getDb(login.siteId)
+      let row = siteDb.one(""" SELECT id, username, email_hash FROM user WHERE email_hash = ? """, login.emailHash)
+      let user = if row.isSome:
+        unpack[User](row.get)
+      else:
+        User(id: 0, username: "", emailHash: login.emailHash)
+      sessionToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
+      t.session[saltedHash(sessionToken)] = user
+      if user.id > 0:
+        if login.notify == "":
+          try:
+            t.notify.del user.id
+          except KeyError:
+            discard
         else:
-          User(id: 0, username: "", emailHash: login.emailHash)
-        sessionToken = generatePassword(96, ['a'..'z', 'A'..'Z', '0'..'9'])
-        t.session[saltedHash(sessionToken)] = user
-        if user.id > 0:
-          if login.notify == "":
-            try:
-              t.notify.del user.id
-            except KeyError:
-              discard
-          else:
-            t.notify[user.id] = login.notify
-    except KeyError:
-      failed = true
+          t.notify[user.id] = login.notify
+  except KeyError:
+    failed = true
   if failed:
     request.ip.shortBan
     request.respond(401, headers, "No link matching this one was sent recently, please check that it is the right one")
@@ -453,21 +440,20 @@ proc postName(request: Request) =
     request.respond(409, headers, "You already chose your name")
     return
   let username = request.param("username").sanitize
-  withGl:
-    let siteDb = db[siteId]
-    try:
-      if auth.user.id == 0:
-        siteDb.exec(""" INSERT INTO user (username, email_hash) VALUES (?, ?) """, username, auth.user.emailHash)
-        let userId = siteDb.lastInsertRowId()
-        kv.session[saltedHash(auth.sessionToken)] = User(id: userId, username: username, emailHash: auth.user.emailHash)
-      else:
-        siteDb.exec(""" UPDATE user SET username = ? WHERE id = ? """, username, auth.user.id)
-        kv.session[saltedHash(auth.sessionToken)] = User(id: auth.user.id, username: username, emailHash: auth.user.emailHash)
-    except SqliteError:
-      request.respond(409, headers, "Someone already chose that name!")
-      return
-    kv.main["userId $# username" % $auth.user.id] = username
-    request.respond(200, headers, "Thank you! You are now known as: $#" % username)
+  let siteDb = getDb(siteId)
+  try:
+    if auth.user.id == 0:
+      siteDb.exec(""" INSERT INTO user (username, email_hash) VALUES (?, ?) """, username, auth.user.emailHash)
+      let userId = siteDb.lastInsertRowId()
+      kv.session[saltedHash(auth.sessionToken)] = User(id: userId, username: username, emailHash: auth.user.emailHash)
+    else:
+      siteDb.exec(""" UPDATE user SET username = ? WHERE id = ? """, username, auth.user.id)
+      kv.session[saltedHash(auth.sessionToken)] = User(id: auth.user.id, username: username, emailHash: auth.user.emailHash)
+  except SqliteError:
+    request.respond(409, headers, "Someone already chose that name!")
+    return
+  kv.main["userId $# username" % $auth.user.id] = username
+  request.respond(200, headers, "Thank you! You are now known as: $#" % username)
 
 proc postPublish(request: Request) =
   var headers = request.corsHeaders
@@ -481,8 +467,7 @@ proc postPublish(request: Request) =
   var urlId, commentId: int
   let comment = request.param("comment").sanitizeHtml
   var siteDb: DbConn
-  withGl:
-    siteDb = db[siteId]
+  siteDb = getDb(siteId)
   try:
     siteDb.exec("BEGIN")
     let value = siteDb.value(""" SELECT id FROM url WHERE url = ? """, url)
@@ -512,11 +497,10 @@ proc postPublish(request: Request) =
     notifyList.add row.unpack((int, string))
   for (userId, emailHash) in notifyList:
     var email: string
-    withGl:
-      email = try:
-        kv.main["userId $# notify" % $userId]
-      except KeyError:
-        continue
+    email = try:
+      kv.main["userId $# notify" % $userId]
+    except KeyError:
+      continue
     try:
       sendMailSync(config.mailFrom, @[email], $createMessage("New Comment from $#" % auth.user.username, """
 $# made a comment:
@@ -546,8 +530,7 @@ proc postLove(request: Request) =
   let auth = request.auth
   let siteId = request.siteId
   var siteDb: DbConn
-  withGl:
-    siteDb = db[siteId]
+  siteDb = getDb(siteId)
   let id = request.pathParams["id"]
   try:
     siteDb.exec("BEGIN")
@@ -569,8 +552,7 @@ proc putCache(request: Request) =
   let auth = request.auth
   let siteId = request.siteId
   var siteDb: DbConn
-  withGl:
-    siteDb = db[siteId]
+  siteDb = getDb(siteId)
   let url = request.param("url")
   let keyName = request.pathParams["key"]
   let key = case keyName:
@@ -603,20 +585,18 @@ proc getUnsubscribe(request: Request) =
   headers["Content-Type"] = textType
   let siteId = request.siteId
   var siteDb: DbConn
-  withGl:
-    siteDb = db[siteId]
+  siteDb = getDb(siteId)
   let emailHash = request.pathParams["emailHash"]
   let value = siteDb.value(""" SELECT id FROM user WHERE email_hash = ? """, emailHash)
   let userId = if value.isSome:
     value.get.fromDbValue(int)
   else:
     -1
-  withGl:
-    try:
-      kv.notify.del userId
-    except KeyError:
-      request.respond(409, headers, "You already do not receive an email when someone comments.")
-      return
+  try:
+    kv.notify.del userId
+  except KeyError:
+    request.respond(409, headers, "You already do not receive an email when someone comments.")
+    return
   request.respond(200, headers, "You will no longer receive an email when someone comments.")
 
 proc getCss(request: Request) =

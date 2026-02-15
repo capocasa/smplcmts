@@ -1,17 +1,19 @@
 ## Integration tests for smplcmts.
-## Run: nim c -r test/integration.nim
+## Run: nim c -r tests/tintegration.nim
 
-import std/[httpclient, os, strutils, unittest, uri, httpcore, times]
-import pkg/mummy
+import std/[httpclient, os, strutils, unittest, uri, httpcore, osproc]
 
-# Import setup FIRST to create test data before serve initializes
+# Import setup FIRST and call init before serve initializes
 import setup
+initTestData()
 
-# Now import serve - it will use the test paths from nim.cfg
-import ../serve, ../secret
+# Import secret for saltedHash used in tests
+import ../secret
 
 const
   baseUrl = "http://localhost:" & $testPort
+  projectDir = currentSourcePath().parentDir().parentDir()
+  testBinary = testDir / "smplcmts_test"
 
 # --- HTTP helpers ---
 
@@ -67,15 +69,22 @@ proc findCommentId(html: string): int =
   let endP = html.find('"', start)
   result = parseInt(html[start..<endP])
 
-# --- Start server in background thread ---
+# --- Build and start server as subprocess ---
 
-var serverThread: Thread[void]
+# Build test binary with test defines
+let compileCmd = "nim c -o:" & testBinary & " " &
+  "-d:defaultSqlPath=\"" & testSqlDir & "\" " &
+  "-d:defaultKvPath=\"" & testKvPath & "\" " &
+  "-d:banMilliseconds=100 " &
+  "--threads:on --mm:orc -d:ssl " &
+  projectDir / "smplcmts.nim"
+let (output, exitCode) = execCmdEx(compileCmd)
+if exitCode != 0:
+  echo output
+  quit("Failed to compile test binary", 1)
 
-proc runServer() {.thread.} =
-  setCurrentDir(testDir)
-  serve(testPort)
-
-createThread(serverThread, runServer)
+var serverProc = startProcess(testBinary, workingDir = testDir,
+  args = ["-p", $testPort])
 
 # Wait for server to be ready
 block:
@@ -297,12 +306,8 @@ suite "smplcmts integration":
     check resp.code == Http400
 
 # Tests complete - clean shutdown
-server.close()
-cleanup()
+serverProc.terminate()
+serverProc.close()
 
 echo "Test dir: ", testDir
 echo "All tests passed!"
-
-# Exit immediately to avoid ORC cleanup crash
-# (thread-boundary ref objects in Tat cause cycle detection issues)
-quit(0)
